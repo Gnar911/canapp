@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canapp"
+version = "0.1.0"
+description = "CAN Analyzer application UI package"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+package-dir = {"canapp" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["canapp"]
