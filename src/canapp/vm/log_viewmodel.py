@@ -9,8 +9,8 @@ from .base_view_model import BaseViewModel
 from fs_test.mock_vm import ParseModel
 from file_service.application_events import ParserStatusEvent
 from file_service.status import ParserStatus
-from file_service.srv_if import get_file_service, LogId, LogfileMetadata
-from file_service.module.fs_core import EntryUpdate, LogRecord
+from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface
+# from file_service.module.fs_core import LogRecord
 from data_object import CANLogLine
 from typing import Literal
 
@@ -145,7 +145,7 @@ class FilterState:
     time: TimeFilter | None = None
 
 class LogViewModel(BaseViewModel, ParseModel):
-
+    progressChanged = Signal()
     stateChanged = Signal()
 
     def __init__(self):
@@ -166,11 +166,12 @@ class LogViewModel(BaseViewModel, ParseModel):
         """
         self._state: ParserStatus | None = None
         self._log_id: LogId | None = None
-        self._metadata: LogfileMetadata | None = None
+        #self._dbc_id: 
+        self._metadata: MetaDataStorageInterface | None = None
         #self._visible_entries: list[CANLogLine] = []
         self._timer = QTimer(self)
         self._timer.setInterval(100)
-        self._timer.timeout.connect(self._poll_progress)
+        self._timer.timeout.connect(lambda: self.stateChanged.emit())
         self._timer.stop()
 
         """ View -> Model state View data type, could do 2 ways binding"""
@@ -353,37 +354,40 @@ class LogViewModel(BaseViewModel, ParseModel):
     """ Transition state change to running or idle"""
     @Slot(str)
     def startParsing(self, path: str):
-        log_id = get_file_service().parse_log(path)
+        log_id = get_file_service().parse_log_file(path)
         if log_id is None:
             self._timer.stop()
-        else:
-            self._timer.start()
-        
-        """ Notify state change here"""
-        self.log_id = log_id
-    
-    def _poll_progress(self):
-        if self.log_id is None:
+            ### NOTE: close storage
             self.metadata = None
         else:
-            self.metadata = get_file_service().get_logfile_metadata(self.log_id)
+            self.metadata = MetaDataStorageInterface(log_id.path_token())
+            self._timer.start()
+        
+        """ NOTE Notify state change here"""
+        self.log_id = log_id
+
+    def closeLog(self):
+        self.log_id = None
 
     @property
     def logTimestampRange(self) -> tuple[float, float]:
         if self.metadata is None:
             return (-1.0, -1.0)
-        if self.metadata.first_timestamp is None or self.metadata.last_timestamp is None:
+        ts = self.metadata.get_first_last_timestamp()
+        if ts is None:
             return (-1.0, -1.0)
+        first_timestamp, last_timestamp = ts
         return (
-            self.metadata.first_timestamp,
-            self.metadata.last_timestamp,
+            first_timestamp,
+            last_timestamp,
         )
 
     @property
     def defaultLogName(self) -> str:
         if self.metadata is None:
             return ""
-        return self.metadata.file_path
+        #TODO
+        return "ABCDXYZ"
 
     @property
     def totalPages(self) -> int:
@@ -397,42 +401,42 @@ class LogViewModel(BaseViewModel, ParseModel):
     def totalLines(self) -> int:
         if self.metadata is None:
             return 0
-        return self.metadata.entry_count
+        return self.metadata.fetch_count()
 
-    def save_edit(self) -> None:
-        if not self.log_id:
-            return
+    # def save_edit(self) -> None:
+    #     if not self.log_id:
+    #         return
         
-        if not self._editing_line:
-            return
+    #     if not self._editing_line:
+    #         return
         
-        entry_updates: list[EntryUpdate] = []
-        for v in list(self._editing_line.values()):
-            # v is a CANLogLine; map to EntryUpdate(line_number + LogRecord payload)
-            r = LogRecord()
-            r.channel = str(v.channel)
-            r.can_id = int(v.can_id)
+    #     entry_updates: list[EntryUpdate] = []
+    #     for v in list(self._editing_line.values()):
+    #         # v is a CANLogLine; map to EntryUpdate(line_number + LogRecord payload)
+    #         r = LogRecord()
+    #         r.channel = str(v.channel)
+    #         r.can_id = int(v.can_id)
 
-            d = v.direction.strip().lower()
-            if d == "rx":
-                r.direction = 0
-            elif d == "tx":
-                r.direction = 1
+    #         d = v.direction.strip().lower()
+    #         if d == "rx":
+    #             r.direction = 0
+    #         elif d == "tx":
+    #             r.direction = 1
 
-            r.data = list(v.data) if v.data is not None else []
-            r.data_len = int(v.data_len)
-            r.timestamp = float(v.timestamp)
+    #         r.data = list(v.data) if v.data is not None else []
+    #         r.data_len = int(v.data_len)
+    #         r.timestamp = float(v.timestamp)
 
-            u = EntryUpdate()
-            # convert 1-based line_number -> 0-based row_index expected by storage
-            u.row_index = max(int(v.line_number) - 1, 0)
-            u.record = r
+    #         u = EntryUpdate()
+    #         # convert 1-based line_number -> 0-based row_index expected by storage
+    #         u.row_index = max(int(v.line_number) - 1, 0)
+    #         u.record = r
 
-            entry_updates.append(u)
+    #         entry_updates.append(u)
 
-        if get_file_service().save_log_edits(self.log_id, entry_updates):
-            self._editing_line.clear()
-            self.stateChanged.emit()
+    #     if get_file_service().save_log_edits(self.log_id, entry_updates):
+    #         self._editing_line.clear()
+    #         self.stateChanged.emit()
     
     @property
     def entries(self) -> list[CANLogLine]:
@@ -492,5 +496,11 @@ class LogViewModel(BaseViewModel, ParseModel):
             )
             pending = self._editing_line.get(int(line.line_number))
             lines.append(deepcopy(pending) if pending is not None else line)
+
+            # NOTE: 2 ways to get the decode data for the CANLogLine here. 
+            # 1. Using decode of python 
+            # 2. Read the decode sql database
+
+            
 
         return lines
