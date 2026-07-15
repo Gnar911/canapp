@@ -449,7 +449,7 @@ class SignalMetadata:
     value: Optional[float] = None
 
 
-#@dataclass(frozen=True)
+@dataclass
 class CANLogLine:
     """ This is the data from parse, not guarantee to map with DBC"""
     """ Modify for write operation, then should re-calculate the msg and signal"""
