@@ -46,3 +46,11 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 src/canapp/pyqt/
+
+# NOTE: Move files/ rename folder without losing git tracking.
+# cd /home/gnar911/lw && 
+# git mv platform/linux_platform.py linux_platform.py &&
+# git mv platform/window_platform.py window_platform.py && 
+# git mv platform/setup_rt_linux.sh setup_rt_linux.sh && 
+# git status --porcelain && 
+# git commit -m "Move platform modules to lw/ root (git mv)" || true

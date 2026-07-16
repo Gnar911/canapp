@@ -15,12 +15,11 @@ RawValue = int
 value = str
 
 @dataclass
-class Signal:
+class DecodedSignalLine:
     raw_value: int   # DECODED DATA
     is_cnt: Optional[bool] = field(default=False) # Is signal a Counter?
     is_chk: Optional[bool] = field(default=False) # Is signal a Checksum?
     changed: Optional[bool] = field(default=False)
-    _sig_info: cantools.database.can.Signal = None # STATIC DATA
     _runtime_signal_name: str = field(default="")
     _runtime_value: Optional[float] = field(default=None)
 
@@ -210,13 +209,15 @@ class Signal:
             show_value = self.value_choice_str
         return f"{name} = {show_value}"
     
+Signal = DecodedSignalLine
+
 """ TODO: With the data no cost performce to calculate like message_name... 
         -> No need to store cache/state for it, use runtime calculate by @property"""
 @dataclass
 class Message:
     # can_id: int
     """TODO: Bind this to can_id"""
-    _msg_info: cantools.database.can.Message
+    #_msg_info: cantools.database.can.Message
     is_fd: bool
     periodic: float
     direction: str  # 'Rx' or 'Tx'
@@ -233,28 +234,6 @@ class Message:
     _runtime_message_name: str = field(default="")
 
     @property
-    def message_name(self):
-        if self._msg_info is not None:
-            return self._msg_info.name
-        return self._runtime_message_name if self._runtime_message_name else ""
-    
-    @property
-    def can_id(self):
-        if self._msg_info is not None:
-            return self._msg_info.frame_id
-        return int(self._runtime_can_id)
-    
-    @property
-    def msg_info(self):
-        return self._msg_info
-
-    @msg_info.setter
-    def msg_info(self, value: cantools.database.can.Message):
-        if value is self._msg_info:
-            return
-        self._msg_info = value
-
-    @property
     def timediff(self) -> float:
         if self.curr_timestamp > self.last_timestamp:
             return self.curr_timestamp - self.last_timestamp
@@ -265,53 +244,53 @@ class Message:
     def checkum(self) -> int:
         return 0
 
-    @property
-    def decode_data(self) -> bytes:
-        return bytes(self.data)
+    # @property
+    # def decode_data(self) -> bytes:
+    #     return bytes(self.data)
 
-    def encode(
-        self,
-        scaling: bool = False,
-        padding: bool = False,
-        strict: bool = True,
-    ) -> bytes:
-        """
-        Encode payload bytes using only current `_cached_signals` raw values.
+    # def encode(
+    #     self,
+    #     scaling: bool = False,
+    #     padding: bool = False,
+    #     strict: bool = True,
+    # ) -> bytes:
+    #     """
+    #     Encode payload bytes using only current `_cached_signals` raw values.
 
-        - Updates `self.data` and `self.data_len` from encoded payload.
-        Returns encoded payload bytes.
-        """
-        if not self.msg_info:
-            raise ValueError("Message info is not available for encoding")
+    #     - Updates `self.data` and `self.data_len` from encoded payload.
+    #     Returns encoded payload bytes.
+    #     """
+    #     if not self.msg_info:
+    #         raise ValueError("Message info is not available for encoding")
 
-        if self.can_id != self.msg_info.frame_id:
-            raise ValueError("CAN ID does not match bound message definition")
+    #     if self.can_id != self.msg_info.frame_id:
+    #         raise ValueError("CAN ID does not match bound message definition")
 
-        if not self._cached_signals:
-            raise ValueError("No cached signals available to encode payload")
+    #     if not self._cached_signals:
+    #         raise ValueError("No cached signals available to encode payload")
 
-        signal_values: Dict[str, Any] = {}
-        for sig_name, sig in self._cached_signals.items():
-            if sig is None or sig.raw_value is None:
-                raise ValueError(f"Cached signal '{sig_name}' has invalid raw value")
-            signal_values[sig_name] = int(sig.raw_value)
+    #     signal_values: Dict[str, Any] = {}
+    #     for sig_name, sig in self._cached_signals.items():
+    #         if sig is None or sig.raw_value is None:
+    #             raise ValueError(f"Cached signal '{sig_name}' has invalid raw value")
+    #         signal_values[sig_name] = int(sig.raw_value)
 
-        try:
-            payload = self.msg_info.encode(
-                signal_values,
-                scaling=scaling,
-                padding=padding,
-                strict=strict,
-            )
-        except Exception as exc:
-            LOG.critical(f"Encode payload failed for CANID[{self.can_id:X}]: {exc}")
-            raise
+    #     try:
+    #         payload = self.msg_info.encode(
+    #             signal_values,
+    #             scaling=scaling,
+    #             padding=padding,
+    #             strict=strict,
+    #         )
+    #     except Exception as exc:
+    #         LOG.critical(f"Encode payload failed for CANID[{self.can_id:X}]: {exc}")
+    #         raise
 
-        self.last_data = list(self.data)
-        self.data = list(payload)
-        self.data_len = len(self.data)
-        self.changed = self.last_data != self.data
-        return payload
+    #     self.last_data = list(self.data)
+    #     self.data = list(payload)
+    #     self.data_len = len(self.data)
+    #     self.changed = self.last_data != self.data
+    #     return payload
     
     def update_current_timestamp(self, curr: float):
         # shift last curr to last timestamp
@@ -346,54 +325,54 @@ class Message:
     def signals(self) -> Dict[str, Signal]:
         return self._cached_signals
 
-    def cal_signal_value(self) -> Dict[str, Signal]:
-        if not self.msg_info:
-            return {}
+    # def cal_signal_value(self) -> Dict[str, Signal]:
+    #     if not self.msg_info:
+    #         return {}
         
-        if self.can_id != self.msg_info.frame_id:
-            return {}
-        # Chuẩn hóa data, nếu data len không đúng so với database
-        # thì có khả năng decode bị fail, nên cần lấp đầy hoặc cắt bớt data trước khi decode
-        # tuy nhiên cần báo lỗi data đấy vào log
-        if self.msg_info.length != len(self.data):
-            LOG.critical(f"CANID[{self.can_id:X}] Data size not valid with database: valid len[{self.msg_info.length}], real len[{len(self.data)}]")
-            self.data = (self.data + [0] * self.msg_info.length)[:self.msg_info.length]
-            self.data_len = self.msg_info.length
-        try:
-            sigs = self.msg_info.decode(self.decode_data, decode_choices=False, scaling=False, allow_truncated=True)
-            last_sigs = sigs.copy()            
-            if self.changed:
-                last_sigs = self.msg_info.decode(bytes(self.last_data), decode_choices=False, scaling=False, allow_truncated=True)
-        except Exception as e:
-            LOG.critical(f"Process Signal has unknown exception: {e}")
-            return {}
+    #     if self.can_id != self.msg_info.frame_id:
+    #         return {}
+    #     # Chuẩn hóa data, nếu data len không đúng so với database
+    #     # thì có khả năng decode bị fail, nên cần lấp đầy hoặc cắt bớt data trước khi decode
+    #     # tuy nhiên cần báo lỗi data đấy vào log
+    #     if self.msg_info.length != len(self.data):
+    #         LOG.critical(f"CANID[{self.can_id:X}] Data size not valid with database: valid len[{self.msg_info.length}], real len[{len(self.data)}]")
+    #         self.data = (self.data + [0] * self.msg_info.length)[:self.msg_info.length]
+    #         self.data_len = self.msg_info.length
+    #     try:
+    #         sigs = self.msg_info.decode(self.decode_data, decode_choices=False, scaling=False, allow_truncated=True)
+    #         last_sigs = sigs.copy()            
+    #         if self.changed:
+    #             last_sigs = self.msg_info.decode(bytes(self.last_data), decode_choices=False, scaling=False, allow_truncated=True)
+    #     except Exception as e:
+    #         LOG.critical(f"Process Signal has unknown exception: {e}")
+    #         return {}
         
-        signals = {}
-        for sig in sigs.items():
-            sig_name = sig[0]
-            sig_info = self.msg_info.get_signal_by_name(sig_name)
-            sig_raw_value = int(sig[1])
-            sigchange = False
+    #     signals = {}
+    #     for sig in sigs.items():
+    #         sig_name = sig[0]
+    #         sig_info = self.msg_info.get_signal_by_name(sig_name)
+    #         sig_raw_value = int(sig[1])
+    #         sigchange = False
 
-            if self.changed:
-                if sig_name not in last_sigs:
-                    sigchange = True
-                else:
-                    if last_sigs[sig_name] != sig_raw_value:
-                        sigchange = True
-            signal = Signal(
-                _sig_info = sig_info,
-                raw_value=sig_raw_value,
-                is_cnt=False,
-                is_chk=False,
-                changed=sigchange,
-            )
-            signals[sig_name] = signal
-            if len(sig_name) > self.signame_max_len:
-                self.signame_max_len = len(sig_name)
+    #         if self.changed:
+    #             if sig_name not in last_sigs:
+    #                 sigchange = True
+    #             else:
+    #                 if last_sigs[sig_name] != sig_raw_value:
+    #                     sigchange = True
+    #         signal = Signal(
+    #             _sig_info = sig_info,
+    #             raw_value=sig_raw_value,
+    #             is_cnt=False,
+    #             is_chk=False,
+    #             changed=sigchange,
+    #         )
+    #         signals[sig_name] = signal
+    #         if len(sig_name) > self.signame_max_len:
+    #             self.signame_max_len = len(sig_name)
         
-        self._cached_signals = signals
-        return signals
+    #     self._cached_signals = signals
+    #     return signals
 
 
     def get_signals_value_show(self) -> Dict[str,str]:
@@ -429,19 +408,6 @@ class Message:
             remaining_seconds = round(seconds % 60, 1)
         return f"{hours}h{minutes}m{remaining_seconds}s"
 
-    # def get_format_message_show(self, msg_max_len: int = 30) -> str:
-    #     message_name_len = max(msg_max_len, 30)
-    #     can_id_str = f"{self.can_id:X}".rjust(8)
-    #     name = (self.message_name or "UNKNOWN")[:message_name_len]
-    #     direction = self.direction
-    #     str_diff = self.get_format_timediff()
-    #     int_timestamp = int(self.curr_timestamp)
-    #     str_timestamp = f"{int(int_timestamp)}.{int((self.curr_timestamp - int_timestamp) * 1000):03d}"
-    #     data_len = self.data_len
-    #     databytes = ' '.join(f"{x:02X}" for x in self.data)
-
-    #     return f"{str_timestamp:>9} {str_diff:<10} {direction:<2} {can_id_str:>8} - {name:<{message_name_len}} {data_len:>2}: {databytes}"
-
 @dataclass
 class SignalMetadata:
     timestamp: float
@@ -449,10 +415,13 @@ class SignalMetadata:
     value: Optional[float] = None
 
 
+""" 20260716 NOTE: This class is the Viewmodel data for displaying a log line.
+                It should not contains the business logic like cantools.database.can.Message
+"""
 @dataclass
 class CANLogLine:
-    """ This is the data from parse, not guarantee to map with DBC"""
-    """ Modify for write operation, then should re-calculate the msg and signal"""
+   # """ This is the data from parse, not guarantee to map with DBC"""
+   # """ Modify for write operation, then should re-calculate the msg and signal"""
     channel: str
     can_id: int
     direction: str  # 'Rx' or 'Tx'
@@ -464,10 +433,29 @@ class CANLogLine:
     last_timestamp: float = 0.0
     _timediff: float = 0.0
     _user_message_name: str = field(default="")
-    message_obj: Optional[Message] = field(default=None)
+    #message_obj: Optional[Message] = field(default=None)
+    """ NOTE: Qt Index Model will handle the look up index mapping for us, so do not need to store dict here."""
+    signals: list[DecodedSignalLine] = field(default=list)
     last_data: list[int] = field(default=list)
     _color_id: str = ""
 
+    # def cal_message_obj(self) -> Message:
+    #     self.message_obj = Message(
+    #         is_fd=True,
+    #         periodic=0.0,
+    #         direction=self.direction,
+    #         data_len=self.data_len,
+    #         data=[int(x, 16) for x in self.raw_data.strip().split()],
+    #         changed=self.changed,
+    #         curr_timestamp=self.timestamp,
+    #         last_timestamp=self.last_timestamp,
+    #         is_need_update_signal=False,
+    #         last_data=[int(x, 16) for x in self.last_raw_data.strip().split()])
+    #     if self.data_len != len(self.message_obj.data):
+    #         LOG.critical(f"Rawdata have wrong size: Size[{self.data_len}], Real Size[{len(self.message_obj.data)}], Data[{self.raw_data}]")
+    #         self.message_obj.data = (self.message_obj.data + [0] * self.data_len)[:self.data_len]
+    #     return self.message_obj
+    
     @property 
     def raw_data(self) -> str:
         # Hex string like "00 1A FF"
@@ -501,29 +489,6 @@ class CANLogLine:
 
     def set_color(self, value: str):
         self._color_id = value
-        
-    def cal_message_obj(self, msg_info: cantools.database.can.Message = None) -> Message:
-        """ Just let the can log line display whatever it read from parsed file, even no recognition of this Message"""
-        """ Signals will be calculated in real time (by the time it is refered) by msg_info"""
-        if self.message_obj:
-            if self.message_obj.msg_info == msg_info:
-                return self.message_obj
-        self.message_obj = Message(
-            _msg_info = msg_info,
-            is_fd=True,
-            periodic=0.0,
-            direction=self.direction,
-            data_len=self.data_len,
-            data=[int(x, 16) for x in self.raw_data.strip().split()],
-            changed=self.changed,
-            curr_timestamp=self.timestamp,
-            last_timestamp=self.last_timestamp,
-            is_need_update_signal=False,
-            last_data=[int(x, 16) for x in self.last_raw_data.strip().split()])
-        if self.data_len != len(self.message_obj.data):
-            LOG.critical(f"Rawdata have wrong size: Size[{self.data_len}], Real Size[{len(self.message_obj.data)}], Data[{self.raw_data}]")
-            self.message_obj.data = (self.message_obj.data + [0] * self.data_len)[:self.data_len]
-        return self.message_obj
 
     @property
     def timediff(self) -> float:
@@ -1161,97 +1126,3 @@ class SignalFilter:
         if not self.signal_info.unit:
             return "--"
         return self.signal_info.unit
-    
-
-class CANDBInfoType(Enum):
-    MIXED = "MIXED"
-    NONE = "NONE"
-
-@dataclass
-class CANDBInfo:
-    _db: Database = field(default_factory=Database)
-    file_path: str = field(default="")
-    backup_file_path: str = field(default="")
-    type: CANDBInfoType = field(default=CANDBInfoType.NONE)
-    _message_index: Dict[int, object] = field(default_factory=dict)
-    _message_index_size: int = field(default=-1)
-
-    @property
-    def name(self):
-        return basename(self.file_path)
-
-    @property
-    def messages(self) -> dict[int, cantools.database.can.Message] | dict[int, list[cantools.database.can.Message]]:
-        self._ensure_message_index()
-        return self._message_index
-
-    @property
-    def comboboxs(self) -> list[str]:
-        return [
-            f"[{msg.frame_id:03X}] {msg.name}"
-            for msg in sorted(self.db.messages, key=lambda m: m.frame_id)
-        ]
-
-    @property
-    def db(self):
-        return self._db
-
-    @db.setter
-    def db(self, value):
-        if value is self._db:
-            return
-        self._db = value
-        self._message_index.clear()
-        self._message_index_size = -1
-
-    def _ensure_message_index(self):
-        current_size = len(self.db.messages)
-        if self._message_index_size == current_size and self._message_index:
-            return
-
-        if self.type == CANDBInfoType.MIXED:
-            grouped: Dict[int, list[cantools.database.can.Message]] = {}
-            for msg in self.db.messages:
-                grouped.setdefault(msg.frame_id, []).append(msg)
-            self._message_index = grouped
-        else:
-            by_id: Dict[int, cantools.database.can.Message] = {}
-            for msg in self.db.messages:
-                by_id[msg.frame_id] = msg
-            self._message_index = by_id
-
-        self._message_index_size = current_size
-
-    def _resolve_message_obj(self, msg_obj) -> Optional[cantools.database.can.Message]:
-        """More than one Message for this CAN-ID → return None, let app handle."""
-        if isinstance(msg_obj, list):
-            if len(msg_obj) == 1:
-                return msg_obj[0]
-            if len(msg_obj) > 1:
-                LOG.warning("More than one Message for this CAN-ID")
-                return None
-        return msg_obj
-
-    def get_message(self, can_id) -> Optional[cantools.database.can.Message]:
-        self._ensure_message_index()
-        msg_obj = self._message_index.get(can_id)
-        if msg_obj is None:
-            return None
-        return self._resolve_message_obj(msg_obj)
-    
-    def get_message_name(self, can_id) -> str:
-        self._ensure_message_index()
-        msg_obj = self._message_index.get(can_id)
-
-        if msg_obj is None:
-            return ""
-
-        if isinstance(msg_obj, list):
-            if len(msg_obj) > 1:
-                return "Unresolved"
-            if len(msg_obj) == 1:
-                message = msg_obj[0]
-                return str(getattr(message, "name", "") or "")
-            return ""
-
-        return str(getattr(msg_obj, "name", "") or "")

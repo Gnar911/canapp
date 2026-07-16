@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import Property, Signal, Slot
 
 from .base_view_model import BaseViewModel
-from fs_test.mock_vm import RecordModel
+from .mock_vm import RecordModel
 from file_service.srv_if import get_file_service, LogId
 from file_service.status import RecorderStatus
 from lw.logger_setup import setup_logger, LOG
