@@ -7,12 +7,14 @@ from copy import deepcopy
 
 from .base_view_model import BaseViewModel
 from fs_test.mock_vm import ParseModel
+from cs_test.mock_vm import ParseModel
 from file_service.application_events import ParserStatusEvent, DBCLoadedEvent
 from file_service.status import ParserStatus
-from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId
+from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
 # from file_service.module.fs_core import LogRecord
-from data_object import CANLogLine
+from canapp.data_object import CANLogLine, DecodedSignalLine
 from typing import Literal
+from lw.logger_setup import LOG
 
 RowId = int
 
@@ -506,8 +508,14 @@ class LogViewModel(BaseViewModel, ParseModel):
             time_range=time_range,
         )
 
+        db: CANDBInfo | None = None
+        # if not unload the DBC or load fail
+        if self.dbc_id is not None:
+            db = get_file_service().get_candb_data(self.dbc_id)
+
         lines: list[CANLogLine] = []
         for row in rows:
+            LOG.debug("Row num: %s", row.line_number)
             line = CANLogLine(
                 channel=str(row.channel),
                 can_id=int(row.can_id),
@@ -519,13 +527,55 @@ class LogViewModel(BaseViewModel, ParseModel):
                 timestamp=float(row.timestamp),
                 last_timestamp=float(row.last_timestamp),
             )
+
+            # Build decoded signals only when DBC is loaded.
+            if db is not None:
+                try:
+                    result = db.decode_message(line.can_id, line.data)
+                    message_def = db.get_message_by_frame_id(line.can_id)
+                    LOG.debug("Decoded: %s", result)
+                    LOG.debug("Message def: %s", message_def)
+
+                    decoded_signals: list[DecodedSignalLine] = []
+                    if isinstance(result, dict) and message_def is not None:
+                        for sig_name, sig_value in result.items():
+                            sig_def = None
+                            try:
+                                sig_def = message_def.get_signal_by_name(str(sig_name))
+                            except Exception:
+                                sig_def = None
+
+                            LOG.debug("Sig def: %s", sig_def)
+
+                            raw_value = 0
+                            if isinstance(sig_value, bool):
+                                raw_value = int(sig_value)
+                            elif isinstance(sig_value, (int, float)):
+                                raw_value = int(sig_value)
+                            elif sig_def is not None and getattr(sig_def, "choices", None):
+                                matched = False
+                                for choice_raw, choice_label in sig_def.choices.items():
+                                    if str(choice_label) == str(sig_value):
+                                        raw_value = int(choice_raw)
+                                        matched = True
+                                        break
+                                if not matched:
+                                    raw_value = 0
+
+                            sig = DecodedSignalLine(
+                                raw_value=raw_value,
+                                changed=bool(line.changed),
+                            )
+                            sig._runtime_signal_name = str(sig_name)
+                            sig._sig_info = sig_def
+                            decoded_signals.append(sig)
+
+                    line.signals = decoded_signals
+                except Exception as e:
+                    LOG.exception("Decode failed: %s", e)
+
             pending = self._editing_line.get(int(line.line_number))
             lines.append(deepcopy(pending) if pending is not None else line)
-
-            # NOTE: 2 ways to get the decode data for the CANLogLine here. 
-            # 1. Using decode of python 
-            # 2. Read the decode sql database
-
             
 
         return lines
