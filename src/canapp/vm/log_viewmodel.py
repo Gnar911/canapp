@@ -7,9 +7,9 @@ from copy import deepcopy
 
 from .base_view_model import BaseViewModel
 from fs_test.mock_vm import ParseModel
-from file_service.application_events import ParserStatusEvent
+from file_service.application_events import ParserStatusEvent, DBCLoadedEvent
 from file_service.status import ParserStatus
-from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface
+from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId
 # from file_service.module.fs_core import LogRecord
 from data_object import CANLogLine
 from typing import Literal
@@ -166,7 +166,7 @@ class LogViewModel(BaseViewModel, ParseModel):
         """
         self._state: ParserStatus | None = None
         self._log_id: LogId | None = None
-        #self._dbc_id: 
+        self._dbc_id: DBCId | None = None
         self._metadata: MetaDataStorageInterface | None = None
         #self._visible_entries: list[CANLogLine] = []
         self._timer = QTimer(self)
@@ -180,14 +180,13 @@ class LogViewModel(BaseViewModel, ParseModel):
         self._editing_line: dict[RowId, CANLogLine] = {}
         self._viewport = (0, 100)
         self._auto_fetch: bool = False
-
     @property
     def editing_line(self):
         return self._editing_line
 
     @editing_line.setter
     def editing_line(self, value):
-        if self._auto_fetch == value:
+        if self._editing_line == value:
             return
 
         self._editing_line = value
@@ -216,18 +215,6 @@ class LogViewModel(BaseViewModel, ParseModel):
 
         self._viewport = value
         self.stateChanged.emit()
-
-    # @property
-    # def visible_entries(self):
-    #     return self._visible_entries
-
-    # @visible_entries.setter
-    # def visible_entries(self, value):
-    #     if self._visible_entries == value:
-    #         return
-
-    #     self._visible_entries = value
-    #     self.stateChanged.emit()
 
     """ NOTE: View no need to care about construct full state so the ViewModel
         will expose individual properties and use replace
@@ -345,26 +332,64 @@ class LogViewModel(BaseViewModel, ParseModel):
         self._log_id = value
         self.stateChanged.emit()
 
-    """ Transition state change to done or failed"""
+    @property
+    def dbc_id(self):
+        return self._dbc_id
+
+    @dbc_id.setter
+    def dbc_id(self, value):
+        if self._dbc_id == value:
+            return
+
+        self._dbc_id = value
+        self.stateChanged.emit()
+
+    """ Transition state change to done or failed, calback funcion for all the viewmodels"""
     def on_parser_status(self, event: ParserStatusEvent):
         ParseModel.on_parser_status(self, event)
-        self._timer.stop()
-        self.state = ParserStatus(int(event.status))
-
-    """ Transition state change to running or idle"""
-    @Slot(str)
-    def startParsing(self, path: str):
-        log_id = get_file_service().parse_log_file(path)
-        if log_id is None:
+        status = ParserStatus(int(event.status))
+        log_id = event.log_id
+        if status == ParserStatus.STARTED:
+            if log_id is not None:
+                self.metadata = MetaDataStorageInterface(log_id.path_token())
+                self._timer.start()
+            else:
+                raise ValueError
+        elif status == ParserStatus.FAILED:
+            # if log_id is None:
+            assert log_id is None
             self._timer.stop()
             ### NOTE: close storage
             self.metadata = None
-        else:
-            self.metadata = MetaDataStorageInterface(log_id.path_token())
-            self._timer.start()
-        
-        """ NOTE Notify state change here"""
+        elif status == ParserStatus.DONE:
+            assert log_id is not None
+            self._timer.stop()
+    
         self.log_id = log_id
+        #self.state = status
+
+    def on_dbc_loaded(self, event: DBCLoadedEvent):
+        #self._dbc_info = event.candb_info
+        self.dbc_id = event.dbc_id
+
+    """ Transition state change to running or idle"""
+    # @Slot(str)
+    # def startParsing(self, path: str):
+    #     log_id = get_file_service().parse_log_file(path)
+    #     if log_id is None:
+    #         self._timer.stop()
+    #         ### NOTE: close storage
+    #         self.metadata = None
+    #     else:
+    #         self.metadata = MetaDataStorageInterface(log_id.path_token())
+    #         self._timer.start()
+        
+    #     """ NOTE Notify state change here"""
+    #     self.log_id = log_id
+
+    @Slot(str)
+    def startParsing(self, path: str):
+        get_file_service().parse_log_file(path)
 
     def closeLog(self):
         self.log_id = None
