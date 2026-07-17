@@ -8,6 +8,7 @@ from .base_view_model import BaseViewModel
 from cs_test.mock_vm import *
 from can_service.can_srv import CANDeviceInfo
 from can_service.srv_if import get_can_service_facade
+from canapp.data_object import DeviceInfoLine
 
 class ChannelViewModel(BaseViewModel, ScannerVM):
     deviceStateChanged = Signal()
@@ -18,10 +19,10 @@ class ChannelViewModel(BaseViewModel, ScannerVM):
         self._available_devices: list[CANDeviceInfo] = []
         self._acquired_devices: list[CANDeviceInfo] = []
 
+    """ State Machine"""
     @property
-    def available_devices(self) -> list[CANDeviceInfo]:
+    def available_devices(self):
         return self._available_devices
-
     @property
     def acquired_devices(self):
         return self._acquired_devices
@@ -41,8 +42,9 @@ class ChannelViewModel(BaseViewModel, ScannerVM):
 
         self._available_devices = value
         self.deviceStateChanged.emit()
+    """"""
 
-    def on_scan_status(self, payload: ResponseACK | NotificationEvent) -> None:
+    def on_scan_status(self, payload: NotificationEvent) -> None:
         ScannerVM.on_scan_status(payload)
         if isinstance(payload, NotificationEvent):
 
@@ -67,18 +69,16 @@ class ChannelViewModel(BaseViewModel, ScannerVM):
         if isinstance(payload, ResponseACK):
             event = payload
             if event.cmd_type == ScanChannelAcquiredStatus:
-                # device = payload.device_info
+                device = payload.device_info
 
-                # self.available_devices.remove(device)
-                # self.acquired_devices.append(device)
-                pass
+                self.available_devices.remove(device)
+                self.acquired_devices.append(device)
 
             if event.cmd_type == ScanChannelReleasedStatus:
-                # device = payload.device_info
+                device = payload.device_info
 
-                # self.acquired_devices.remove(device)
-                # self.available_devices.append(device)
-                pass
+                self.acquired_devices.remove(device)
+                self.available_devices.append(device)
             
     @Slot(int, result=bool)
     def acquireDevice(self, selected_index: int) -> bool:
@@ -100,3 +100,42 @@ class ChannelViewModel(BaseViewModel, ScannerVM):
 
         self._can_service.release(device)
 
+    """ Vendor list box"""
+    @property
+    def vendor_list(self) -> list[str]:
+        vendors = {
+            dev.vendor
+            for dev in (*self._available_devices, *self._acquired_devices)
+        }
+        return sorted(vendors)
+
+    """ Status tree display"""
+    @property
+    def all_device_status(self) -> list[DeviceInfoLine]:
+        lines: list[DeviceInfoLine] = []
+
+        for dev in self._available_devices:
+            lines.append(
+                DeviceInfoLine(
+                    device=dev,
+                    status="Available",
+                )
+            )
+
+        for dev in self._acquired_devices:
+            lines.append(
+                DeviceInfoLine(
+                    device=dev,
+                    status="Acquired",
+                )
+            )
+
+        return lines
+    
+    """ Combobox display"""
+    @property
+    def available_device_lists(self) -> list[str]:
+        return [
+            str(dev.device_id)
+            for dev in self._available_devices
+        ]
