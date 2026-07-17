@@ -7,12 +7,13 @@ from copy import deepcopy
 
 from .base_view_model import BaseViewModel
 from fs_test.mock_vm import ParseModel
-from cs_test.mock_vm import ParseModel
+from cs_test.mock_vm import *
 from file_service.application_events import ParserStatusEvent, DBCLoadedEvent
 from file_service.status import ParserStatus
-from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
+from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, CA
 # from file_service.module.fs_core import LogRecord
 from canapp.data_object import CANLogLine, DecodedSignalLine
+from can_service.srv_status import ResponseACK, NotificationEvent
 from typing import Literal
 from lw.logger_setup import LOG
 
@@ -169,8 +170,8 @@ class LogViewModel(BaseViewModel, ParseModel):
         self._state: ParserStatus | None = None
         self._log_id: LogId | None = None
         self._dbc_id: DBCId | None = None
+
         self._metadata: MetaDataStorageInterface | None = None
-        #self._visible_entries: list[CANLogLine] = []
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(lambda: self.stateChanged.emit())
@@ -373,7 +374,7 @@ class LogViewModel(BaseViewModel, ParseModel):
     def on_dbc_loaded(self, event: DBCLoadedEvent):
         #self._dbc_info = event.candb_info
         self.dbc_id = event.dbc_id
-
+            
     """ Transition state change to running or idle"""
     # @Slot(str)
     # def startParsing(self, path: str):
