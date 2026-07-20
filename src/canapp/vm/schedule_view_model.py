@@ -1,80 +1,120 @@
 from __future__ import annotations
 
-from typing import Any
+from PySide6.QtCore import Signal, Slot, QObject
 
-from PySide6.QtCore import Property, Signal, Slot
+from cs_test.mock_vm import SendStatusVM
+from cansrv.can_srv import CANService, CANDeviceInfo
+from cansrv.snd_contract import (
+    SndAdd,
+    SndClear,
+    SndPause,
+    SndRemove,
+    SndResume,
+    SndUpdateData,
+    SndUpdatePeriod,
+    SndDeviceAccquired,
+    SndDeviceUnaccquired,
+)
+from lw.srv_event import SrvEvent
+from cansrv.module.fs_core import ParsedEntry
 
-from .base_view_model import BaseViewModel
 
+class ScheduleViewModel(QObject, SendStatusVM):
+    scheduleStateChanged = Signal()
 
-class ScheduleViewModel(BaseViewModel):
-    sendStatusChanged = Signal()
-    lastErrorChanged = Signal()
+    def __init__(self):
+        super().__init__()
+        self._can_service = CANService()
+        self._is_active = False
+        self._active_count = 0
 
-    def __init__(self, can_service: Any, event_types: dict[str, type] | None = None):
-        super().__init__(event_types=event_types)
-        self._can_service = can_service
-        self._send_status: dict[str, Any] = {}
-        self._last_error = ""
+    @property
+    def isActive(self) -> bool:
+        return self._is_active
 
-        self._subscribe_event(self._can_service, "SendStatusEvent", self._on_send_status)
-        self._subscribe_event(self._can_service, "ScheduleFailedEvent", self._on_schedule_failed)
+    @isActive.setter
+    def isActive(self, value: bool) -> None:
+        if self._is_active == value:
+            return
+        self._is_active = value
+        self.scheduleStateChanged.emit()
 
-    @Property("QVariantMap", notify=sendStatusChanged)
-    def sendStatus(self) -> dict[str, Any]:
-        return self._send_status
+    @property
+    def isStop(self) -> bool:
+        return not self._is_active
 
-    @Property(str, notify=lastErrorChanged)
-    def lastError(self) -> str:
-        return self._last_error
+    @property
+    def activeCount(self) -> int:
+        return int(self._active_count)
 
-    @Slot("QVariant", float, float, result=bool)
-    def sendMsgLoop(self, entry: Any, initial_periodic: float, timeout_s: float = 0.0) -> bool:
-        return bool(self._can_service.send_msg_loop(entry, initial_periodic, timeout_s=timeout_s))
+    @activeCount.setter
+    def activeCount(self, value: int) -> None:
+        value = max(0, int(value))
+        if self._active_count == value:
+            return
+        self._active_count = value
+        self.scheduleStateChanged.emit()
 
-    @Slot("QVariant", result=bool)
-    def sendOnce(self, entry: Any) -> bool:
-        return bool(self._can_service.send_once(entry))
+    @Slot("QVariant", "QVariant", float)
+    def sendMsgLoop(self, device_info: CANDeviceInfo, entry: ParsedEntry, initial_periodic: float) -> None:
+        self._can_service.send_msg_loop(device_info, entry, initial_periodic)
+        return None
 
-    @Slot(int, int, result=bool)
-    def pauseMsg(self, channel_id: int, can_id: int) -> bool:
-        return bool(self._can_service.pause_msg(channel_id, can_id))
+    @Slot("QVariant", "QVariant")
+    def sendOnce(self, device_info: CANDeviceInfo, entry: ParsedEntry) -> None:
+        self._can_service.send_once(device_info, entry)
+        return None
 
-    @Slot(result=bool)
-    def pauseAll(self) -> bool:
-        return bool(self._can_service.pause_all())
+    @Slot("QVariant", "QVariant")
+    def pauseMsg(self, device_info: CANDeviceInfo, entry: ParsedEntry) -> None:
+        self._can_service.pause_msg(device_info, entry)
+        return None
 
-    @Slot(int, int, result=bool)
-    def resumeMsg(self, channel_id: int, can_id: int) -> bool:
-        return bool(self._can_service.resume_msg(channel_id, can_id))
+    @Slot("QVariant", "QVariant")
+    def resumeMsg(self, device_info: CANDeviceInfo, entry: ParsedEntry) -> None:
+        self._can_service.resume_msg(device_info, entry)
+        return None
 
-    @Slot(result=bool)
-    def resumeAll(self) -> bool:
-        return bool(self._can_service.resume_all())
+    @Slot("QVariant", "QVariant")
+    def removeMsg(self, device_info: CANDeviceInfo, entry: ParsedEntry) -> None:
+        self._can_service.remove_msg(device_info, entry)
+        return None
 
-    @Slot(int, int, result=bool)
-    def removeMsg(self, channel_id: int, can_id: int) -> bool:
-        return bool(self._can_service.remove_msg(channel_id, can_id))
+    @Slot()
+    def clear(self) -> None:
+        self._can_service.clear()
+        return None
 
-    @Slot(result=bool)
-    def clear(self) -> bool:
-        return bool(self._can_service.clear())
+    @Slot("QVariant", "QVariant", float)
+    def updatePeriodic(self, device_info: CANDeviceInfo, entry: ParsedEntry, period: float) -> None:
+        self._can_service.update_periodic(device_info, entry, period)
+        return None
 
-    @Slot(int, int, float, result=bool)
-    def updatePeriodic(self, channel_id: int, can_id: int, period: float) -> bool:
-        return bool(self._can_service.update_periodic(channel_id, can_id, period))
+    def on_send_status(self, event: SrvEvent) -> None:
+        SendStatusVM.on_send_status(self, event)
 
-    @Slot(result="QVariantMap")
-    def refreshSendStatus(self) -> dict[str, Any]:
-        status = dict(self._can_service.get_send_status(refresh=True, timeout_s=1.0))
-        self._set_if_changed(self, "_send_status", status, self.sendStatusChanged)
-        return status
+        evt = event
 
-    def _on_send_status(self, event: Any) -> None:
-        status = getattr(event, "status", None)
-        if isinstance(status, dict):
-            self._set_if_changed(self, "_send_status", status, self.sendStatusChanged)
-
-    def _on_schedule_failed(self, event: Any) -> None:
-        message = str(getattr(event, "message", "Schedule operation failed"))
-        self._set_if_changed(self, "_last_error", message, self.lastErrorChanged)
+        if isinstance(evt, SndAdd):
+            self.activeCount = self.activeCount + 1
+            self.isActive = True
+        elif isinstance(evt, SndRemove):
+            self.activeCount = max(0, self.activeCount - 1)
+            self.isActive = self.activeCount > 0
+        elif isinstance(evt, SndClear):
+            self.activeCount = 0
+            self.isActive = False
+        elif isinstance(evt, SndPause):
+            self.isActive = False
+        elif isinstance(evt, SndResume):
+            self.isActive = self.activeCount > 0
+        elif isinstance(evt, SndUpdatePeriod):
+            self.isActive = self.activeCount > 0
+        elif isinstance(evt, SndUpdateData):
+            self.isActive = self.activeCount > 0
+        elif isinstance(evt, SndDeviceAccquired):
+            self.isActive = self.activeCount > 0
+        elif isinstance(evt, SndDeviceUnaccquired):
+            # conservative reset on device detach to avoid stale active counters
+            self.activeCount = 0
+            self.isActive = False
