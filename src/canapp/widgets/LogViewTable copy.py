@@ -16,7 +16,7 @@ from ui_sdk.components.pyqt.SignalEditBox import SignalEditBox
 from ui_sdk.components.pyqt.DlcRawBinder import DlcRawBinder
 
 #TEST
-from services.file_service.src.file_service.parser import LogParser
+from cansrv.file_service.parser import LogParser
 
 TAG_FG = {
     "normal": QColor("#FFFFFF"),

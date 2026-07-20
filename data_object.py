@@ -1,3 +1,7 @@
+""" NOTE: This is not actually a problematic circular object dependency. 
+        It's a normal bidirectional object relationship."""
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Callable, Any, Tuple, Set
 from collections import defaultdict
@@ -22,6 +26,12 @@ class DecodedSignalLine:
     changed: Optional[bool] = field(default=False)
     _runtime_signal_name: str = field(default="")
     _runtime_value: Optional[float] = field(default=None)
+
+    parent: CANLogLine | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def rawvalue(self) -> int:
@@ -211,202 +221,202 @@ class DecodedSignalLine:
     
 Signal = DecodedSignalLine
 
-""" TODO: With the data no cost performce to calculate like message_name... 
-        -> No need to store cache/state for it, use runtime calculate by @property"""
-@dataclass
-class Message:
-    # can_id: int
-    """TODO: Bind this to can_id"""
-    #_msg_info: cantools.database.can.Message
-    is_fd: bool
-    periodic: float
-    direction: str  # 'Rx' or 'Tx'
-    data_len: int
-    data: List[int]
-    changed: bool
-    curr_timestamp: float = field(default=0.0)
-    last_timestamp: float = field(default=0.0)
-    is_need_update_signal: bool = field(default=False)
-    _cached_signals: Dict[str, Signal] = field(default_factory=dict)
-    signame_max_len: int = field(default=0)
-    last_data: List[int] = field(default_factory=list)
-    _runtime_can_id: int = field(default=0)
-    _runtime_message_name: str = field(default="")
+# """ TODO: With the data no cost performce to calculate like message_name... 
+#         -> No need to store cache/state for it, use runtime calculate by @property"""
+# @dataclass
+# class Message:
+#     # can_id: int
+#     """TODO: Bind this to can_id"""
+#     #_msg_info: cantools.database.can.Message
+#     is_fd: bool
+#     periodic: float
+#     direction: str  # 'Rx' or 'Tx'
+#     data_len: int
+#     data: List[int]
+#     changed: bool
+#     curr_timestamp: float = field(default=0.0)
+#     last_timestamp: float = field(default=0.0)
+#     is_need_update_signal: bool = field(default=False)
+#     _cached_signals: Dict[str, Signal] = field(default_factory=dict)
+#     signame_max_len: int = field(default=0)
+#     last_data: List[int] = field(default_factory=list)
+#     _runtime_can_id: int = field(default=0)
+#     _runtime_message_name: str = field(default="")
 
-    @property
-    def timediff(self) -> float:
-        if self.curr_timestamp > self.last_timestamp:
-            return self.curr_timestamp - self.last_timestamp
-        else:
-            return 0.0
+#     @property
+#     def timediff(self) -> float:
+#         if self.curr_timestamp > self.last_timestamp:
+#             return self.curr_timestamp - self.last_timestamp
+#         else:
+#             return 0.0
     
-    @property
-    def checkum(self) -> int:
-        return 0
+#     @property
+#     def checkum(self) -> int:
+#         return 0
 
-    # @property
-    # def decode_data(self) -> bytes:
-    #     return bytes(self.data)
+#     # @property
+#     # def decode_data(self) -> bytes:
+#     #     return bytes(self.data)
 
-    # def encode(
-    #     self,
-    #     scaling: bool = False,
-    #     padding: bool = False,
-    #     strict: bool = True,
-    # ) -> bytes:
-    #     """
-    #     Encode payload bytes using only current `_cached_signals` raw values.
+#     # def encode(
+#     #     self,
+#     #     scaling: bool = False,
+#     #     padding: bool = False,
+#     #     strict: bool = True,
+#     # ) -> bytes:
+#     #     """
+#     #     Encode payload bytes using only current `_cached_signals` raw values.
 
-    #     - Updates `self.data` and `self.data_len` from encoded payload.
-    #     Returns encoded payload bytes.
-    #     """
-    #     if not self.msg_info:
-    #         raise ValueError("Message info is not available for encoding")
+#     #     - Updates `self.data` and `self.data_len` from encoded payload.
+#     #     Returns encoded payload bytes.
+#     #     """
+#     #     if not self.msg_info:
+#     #         raise ValueError("Message info is not available for encoding")
 
-    #     if self.can_id != self.msg_info.frame_id:
-    #         raise ValueError("CAN ID does not match bound message definition")
+#     #     if self.can_id != self.msg_info.frame_id:
+#     #         raise ValueError("CAN ID does not match bound message definition")
 
-    #     if not self._cached_signals:
-    #         raise ValueError("No cached signals available to encode payload")
+#     #     if not self._cached_signals:
+#     #         raise ValueError("No cached signals available to encode payload")
 
-    #     signal_values: Dict[str, Any] = {}
-    #     for sig_name, sig in self._cached_signals.items():
-    #         if sig is None or sig.raw_value is None:
-    #             raise ValueError(f"Cached signal '{sig_name}' has invalid raw value")
-    #         signal_values[sig_name] = int(sig.raw_value)
+#     #     signal_values: Dict[str, Any] = {}
+#     #     for sig_name, sig in self._cached_signals.items():
+#     #         if sig is None or sig.raw_value is None:
+#     #             raise ValueError(f"Cached signal '{sig_name}' has invalid raw value")
+#     #         signal_values[sig_name] = int(sig.raw_value)
 
-    #     try:
-    #         payload = self.msg_info.encode(
-    #             signal_values,
-    #             scaling=scaling,
-    #             padding=padding,
-    #             strict=strict,
-    #         )
-    #     except Exception as exc:
-    #         LOG.critical(f"Encode payload failed for CANID[{self.can_id:X}]: {exc}")
-    #         raise
+#     #     try:
+#     #         payload = self.msg_info.encode(
+#     #             signal_values,
+#     #             scaling=scaling,
+#     #             padding=padding,
+#     #             strict=strict,
+#     #         )
+#     #     except Exception as exc:
+#     #         LOG.critical(f"Encode payload failed for CANID[{self.can_id:X}]: {exc}")
+#     #         raise
 
-    #     self.last_data = list(self.data)
-    #     self.data = list(payload)
-    #     self.data_len = len(self.data)
-    #     self.changed = self.last_data != self.data
-    #     return payload
+#     #     self.last_data = list(self.data)
+#     #     self.data = list(payload)
+#     #     self.data_len = len(self.data)
+#     #     self.changed = self.last_data != self.data
+#     #     return payload
     
-    def update_current_timestamp(self, curr: float):
-        # shift last curr to last timestamp
-        self.last_timestamp = self.curr_timestamp
-        # replace last curr to new curr
-        self.curr_timestamp = curr
+#     def update_current_timestamp(self, curr: float):
+#         # shift last curr to last timestamp
+#         self.last_timestamp = self.curr_timestamp
+#         # replace last curr to new curr
+#         self.curr_timestamp = curr
         
-    @property
-    def dlc(self):
-        # Failsafe if len larger than 64
-        dlc = 15
-        if not self.is_fd or self.data_len <= 8:
-            # CAN Standard
-            dlc = 8
-        elif self.data_len <= 12:
-            dlc = 9
-        elif self.data_len <= 16:
-            dlc = 10
-        elif self.data_len <= 20:
-            dlc = 11
-        elif self.data_len <= 24:
-            dlc = 12
-        elif self.data_len <= 32:
-            dlc = 13
-        elif self.data_len <= 48:
-            dlc = 14
-        elif self.data_len <= 64:
-            dlc = 15
-        return dlc
+#     @property
+#     def dlc(self):
+#         # Failsafe if len larger than 64
+#         dlc = 15
+#         if not self.is_fd or self.data_len <= 8:
+#             # CAN Standard
+#             dlc = 8
+#         elif self.data_len <= 12:
+#             dlc = 9
+#         elif self.data_len <= 16:
+#             dlc = 10
+#         elif self.data_len <= 20:
+#             dlc = 11
+#         elif self.data_len <= 24:
+#             dlc = 12
+#         elif self.data_len <= 32:
+#             dlc = 13
+#         elif self.data_len <= 48:
+#             dlc = 14
+#         elif self.data_len <= 64:
+#             dlc = 15
+#         return dlc
 
-    @property
-    def signals(self) -> Dict[str, Signal]:
-        return self._cached_signals
+#     @property
+#     def signals(self) -> Dict[str, Signal]:
+#         return self._cached_signals
 
-    # def cal_signal_value(self) -> Dict[str, Signal]:
-    #     if not self.msg_info:
-    #         return {}
+#     # def cal_signal_value(self) -> Dict[str, Signal]:
+#     #     if not self.msg_info:
+#     #         return {}
         
-    #     if self.can_id != self.msg_info.frame_id:
-    #         return {}
-    #     # Chuẩn hóa data, nếu data len không đúng so với database
-    #     # thì có khả năng decode bị fail, nên cần lấp đầy hoặc cắt bớt data trước khi decode
-    #     # tuy nhiên cần báo lỗi data đấy vào log
-    #     if self.msg_info.length != len(self.data):
-    #         LOG.critical(f"CANID[{self.can_id:X}] Data size not valid with database: valid len[{self.msg_info.length}], real len[{len(self.data)}]")
-    #         self.data = (self.data + [0] * self.msg_info.length)[:self.msg_info.length]
-    #         self.data_len = self.msg_info.length
-    #     try:
-    #         sigs = self.msg_info.decode(self.decode_data, decode_choices=False, scaling=False, allow_truncated=True)
-    #         last_sigs = sigs.copy()            
-    #         if self.changed:
-    #             last_sigs = self.msg_info.decode(bytes(self.last_data), decode_choices=False, scaling=False, allow_truncated=True)
-    #     except Exception as e:
-    #         LOG.critical(f"Process Signal has unknown exception: {e}")
-    #         return {}
+#     #     if self.can_id != self.msg_info.frame_id:
+#     #         return {}
+#     #     # Chuẩn hóa data, nếu data len không đúng so với database
+#     #     # thì có khả năng decode bị fail, nên cần lấp đầy hoặc cắt bớt data trước khi decode
+#     #     # tuy nhiên cần báo lỗi data đấy vào log
+#     #     if self.msg_info.length != len(self.data):
+#     #         LOG.critical(f"CANID[{self.can_id:X}] Data size not valid with database: valid len[{self.msg_info.length}], real len[{len(self.data)}]")
+#     #         self.data = (self.data + [0] * self.msg_info.length)[:self.msg_info.length]
+#     #         self.data_len = self.msg_info.length
+#     #     try:
+#     #         sigs = self.msg_info.decode(self.decode_data, decode_choices=False, scaling=False, allow_truncated=True)
+#     #         last_sigs = sigs.copy()            
+#     #         if self.changed:
+#     #             last_sigs = self.msg_info.decode(bytes(self.last_data), decode_choices=False, scaling=False, allow_truncated=True)
+#     #     except Exception as e:
+#     #         LOG.critical(f"Process Signal has unknown exception: {e}")
+#     #         return {}
         
-    #     signals = {}
-    #     for sig in sigs.items():
-    #         sig_name = sig[0]
-    #         sig_info = self.msg_info.get_signal_by_name(sig_name)
-    #         sig_raw_value = int(sig[1])
-    #         sigchange = False
+#     #     signals = {}
+#     #     for sig in sigs.items():
+#     #         sig_name = sig[0]
+#     #         sig_info = self.msg_info.get_signal_by_name(sig_name)
+#     #         sig_raw_value = int(sig[1])
+#     #         sigchange = False
 
-    #         if self.changed:
-    #             if sig_name not in last_sigs:
-    #                 sigchange = True
-    #             else:
-    #                 if last_sigs[sig_name] != sig_raw_value:
-    #                     sigchange = True
-    #         signal = Signal(
-    #             _sig_info = sig_info,
-    #             raw_value=sig_raw_value,
-    #             is_cnt=False,
-    #             is_chk=False,
-    #             changed=sigchange,
-    #         )
-    #         signals[sig_name] = signal
-    #         if len(sig_name) > self.signame_max_len:
-    #             self.signame_max_len = len(sig_name)
+#     #         if self.changed:
+#     #             if sig_name not in last_sigs:
+#     #                 sigchange = True
+#     #             else:
+#     #                 if last_sigs[sig_name] != sig_raw_value:
+#     #                     sigchange = True
+#     #         signal = Signal(
+#     #             _sig_info = sig_info,
+#     #             raw_value=sig_raw_value,
+#     #             is_cnt=False,
+#     #             is_chk=False,
+#     #             changed=sigchange,
+#     #         )
+#     #         signals[sig_name] = signal
+#     #         if len(sig_name) > self.signame_max_len:
+#     #             self.signame_max_len = len(sig_name)
         
-    #     self._cached_signals = signals
-    #     return signals
+#     #     self._cached_signals = signals
+#     #     return signals
 
 
-    def get_signals_value_show(self) -> Dict[str,str]:
-        if not self.signals or len(self.signals) == 0:
-            return {}
-        ret = {}
-        for signame, siginfo in self.signals.items():
-            ret[signame] = siginfo.get_format_signal_show(self.signame_max_len)
-        return ret
+#     def get_signals_value_show(self) -> Dict[str,str]:
+#         if not self.signals or len(self.signals) == 0:
+#             return {}
+#         ret = {}
+#         for signame, siginfo in self.signals.items():
+#             ret[signame] = siginfo.get_format_signal_show(self.signame_max_len)
+#         return ret
 
-    def get_signal_raw_value_by_name(self, signal_name):
-        for sig_n in self.signals:
-            if sig_n ==  signal_name:
-                return self.signals[sig_n].raw_value
+#     def get_signal_raw_value_by_name(self, signal_name):
+#         for sig_n in self.signals:
+#             if sig_n ==  signal_name:
+#                 return self.signals[sig_n].raw_value
 
-    def get_signals_name_list(self) -> List[str]:
-        if len(self.signals.keys()) > 0:
-            return [key for key in self.signals.keys()]
+#     def get_signals_name_list(self) -> List[str]:
+#         if len(self.signals.keys()) > 0:
+#             return [key for key in self.signals.keys()]
 
-    def get_format_timediff(self) -> str:
-        seconds = self.timediff
-        if seconds < 1:
-            return f"{int(seconds * 1000)}ms"
-        elif seconds < 60:
-            return f"{round(seconds, 1)}s"
-        elif seconds < 3600:
-            minutes = int(seconds // 60)
-            remaining_seconds = round(seconds % 60, 1)
-            return f"{minutes}m{remaining_seconds}s"
-        else:
-            hours = int(seconds // 3600)
-            minutes = int((seconds % 3600) // 60)
-            remaining_seconds = round(seconds % 60, 1)
-        return f"{hours}h{minutes}m{remaining_seconds}s"
+#     def get_format_timediff(self) -> str:
+#         seconds = self.timediff
+#         if seconds < 1:
+#             return f"{int(seconds * 1000)}ms"
+#         elif seconds < 60:
+#             return f"{round(seconds, 1)}s"
+#         elif seconds < 3600:
+#             minutes = int(seconds // 60)
+#             remaining_seconds = round(seconds % 60, 1)
+#             return f"{minutes}m{remaining_seconds}s"
+#         else:
+#             hours = int(seconds // 3600)
+#             minutes = int((seconds % 3600) // 60)
+#             remaining_seconds = round(seconds % 60, 1)
+#         return f"{hours}h{minutes}m{remaining_seconds}s"
 
 @dataclass
 class SignalMetadata:
@@ -438,23 +448,6 @@ class CANLogLine:
     signals: list[DecodedSignalLine] = field(default=list)
     last_data: list[int] = field(default=list)
     _color_id: str = ""
-
-    # def cal_message_obj(self) -> Message:
-    #     self.message_obj = Message(
-    #         is_fd=True,
-    #         periodic=0.0,
-    #         direction=self.direction,
-    #         data_len=self.data_len,
-    #         data=[int(x, 16) for x in self.raw_data.strip().split()],
-    #         changed=self.changed,
-    #         curr_timestamp=self.timestamp,
-    #         last_timestamp=self.last_timestamp,
-    #         is_need_update_signal=False,
-    #         last_data=[int(x, 16) for x in self.last_raw_data.strip().split()])
-    #     if self.data_len != len(self.message_obj.data):
-    #         LOG.critical(f"Rawdata have wrong size: Size[{self.data_len}], Real Size[{len(self.message_obj.data)}], Data[{self.raw_data}]")
-    #         self.message_obj.data = (self.message_obj.data + [0] * self.data_len)[:self.data_len]
-    #     return self.message_obj
     
     @property 
     def raw_data(self) -> str:
@@ -610,301 +603,301 @@ class CANLogPlay(CANLogLine):
     
 
 """ STRICT PERFORMACE CONSIDERATION: This class is designed"""
-@dataclass
-class CANLogFile:
-    file_path: str
-    file_dump: str = field(default="")
-    total_lines: int = field(default=0)
-    verified_size: int = field(default=0)
-    log_entries: Dict[int, CANLogLine] = field(default_factory=dict) # Collecting at parsing time
-    can_ids: list[int] = field(default_factory=list) # Collecting at parsing time
-    messsages: List[Message] = field(default_factory=list)
-    canid_lines_index: Dict[int, List[int]] = field(default_factory=dict)
-    canid_line_pos_index: Dict[int, Dict[int, int]] = field(default_factory=dict)
-    signal_lines_index: Dict[int, Dict[str, List[int]]] = field(default_factory=dict)
-    signal_line_pos_index: Dict[int, Dict[str, Dict[int, int]]] = field(default_factory=dict)
-    signal_timestamps_index: Dict[int, Dict[str, List[float]]] = field(default_factory=dict)
-    signal_raw_values_index: Dict[int, Dict[str, List[Optional[int]]]] = field(default_factory=dict)
-    signal_values_index: Dict[int, Dict[str, List[Optional[float]]]] = field(default_factory=dict)
+# @dataclass
+# class CANLogFile:
+#     file_path: str
+#     file_dump: str = field(default="")
+#     total_lines: int = field(default=0)
+#     verified_size: int = field(default=0)
+#     log_entries: Dict[int, CANLogLine] = field(default_factory=dict) # Collecting at parsing time
+#     can_ids: list[int] = field(default_factory=list) # Collecting at parsing time
+#     messsages: List[Message] = field(default_factory=list)
+#     canid_lines_index: Dict[int, List[int]] = field(default_factory=dict)
+#     canid_line_pos_index: Dict[int, Dict[int, int]] = field(default_factory=dict)
+#     signal_lines_index: Dict[int, Dict[str, List[int]]] = field(default_factory=dict)
+#     signal_line_pos_index: Dict[int, Dict[str, Dict[int, int]]] = field(default_factory=dict)
+#     signal_timestamps_index: Dict[int, Dict[str, List[float]]] = field(default_factory=dict)
+#     signal_raw_values_index: Dict[int, Dict[str, List[Optional[int]]]] = field(default_factory=dict)
+#     signal_values_index: Dict[int, Dict[str, List[Optional[float]]]] = field(default_factory=dict)
 
-    @property
-    def file_name(self) -> str:
-        if not self.file_path:
-            return ""
-        return Path(self.file_path).name
+#     @property
+#     def file_name(self) -> str:
+#         if not self.file_path:
+#             return ""
+#         return Path(self.file_path).name
 
-    @property
-    def signal_names(self) -> List[str]:
-        return list({
-            signal_name
-            for signals_by_name in self.signal_lines_index.values()
-            for signal_name in signals_by_name
-        })
+#     @property
+#     def signal_names(self) -> List[str]:
+#         return list({
+#             signal_name
+#             for signals_by_name in self.signal_lines_index.values()
+#             for signal_name in signals_by_name
+#         })
 
-    def clear_signal_metadata(self):
-        self.canid_lines_index.clear()
-        self.canid_line_pos_index.clear()
-        self.signal_lines_index.clear()
-        self.signal_line_pos_index.clear()
-        self.signal_timestamps_index.clear()
-        self.signal_raw_values_index.clear()
-        self.signal_values_index.clear()
+#     def clear_signal_metadata(self):
+#         self.canid_lines_index.clear()
+#         self.canid_line_pos_index.clear()
+#         self.signal_lines_index.clear()
+#         self.signal_line_pos_index.clear()
+#         self.signal_timestamps_index.clear()
+#         self.signal_raw_values_index.clear()
+#         self.signal_values_index.clear()
 
-    def upsert_signal_metadata(
-        self,
-        line_number: int,
-        can_id: int,
-        signal_name: str,
-        timestamp: float,
-        raw_value: Optional[int] = None,
-        value: Optional[float] = None,
-    ):
-        if can_id not in self.canid_lines_index:
-            self.canid_lines_index[can_id] = []
-            self.canid_line_pos_index[can_id] = {}
+#     def upsert_signal_metadata(
+#         self,
+#         line_number: int,
+#         can_id: int,
+#         signal_name: str,
+#         timestamp: float,
+#         raw_value: Optional[int] = None,
+#         value: Optional[float] = None,
+#     ):
+#         if can_id not in self.canid_lines_index:
+#             self.canid_lines_index[can_id] = []
+#             self.canid_line_pos_index[can_id] = {}
 
-        if can_id not in self.signal_lines_index:
-            self.signal_lines_index[can_id] = {}
-            self.signal_line_pos_index[can_id] = {}
-            self.signal_timestamps_index[can_id] = {}
-            self.signal_raw_values_index[can_id] = {}
-            self.signal_values_index[can_id] = {}
+#         if can_id not in self.signal_lines_index:
+#             self.signal_lines_index[can_id] = {}
+#             self.signal_line_pos_index[can_id] = {}
+#             self.signal_timestamps_index[can_id] = {}
+#             self.signal_raw_values_index[can_id] = {}
+#             self.signal_values_index[can_id] = {}
 
-        if signal_name not in self.signal_lines_index[can_id]:
-            self.signal_lines_index[can_id][signal_name] = []
-            self.signal_line_pos_index[can_id][signal_name] = {}
-            self.signal_timestamps_index[can_id][signal_name] = []
-            self.signal_raw_values_index[can_id][signal_name] = []
-            self.signal_values_index[can_id][signal_name] = []
+#         if signal_name not in self.signal_lines_index[can_id]:
+#             self.signal_lines_index[can_id][signal_name] = []
+#             self.signal_line_pos_index[can_id][signal_name] = {}
+#             self.signal_timestamps_index[can_id][signal_name] = []
+#             self.signal_raw_values_index[can_id][signal_name] = []
+#             self.signal_values_index[can_id][signal_name] = []
 
-        # [can-id].append(line)
-        can_line_pos = self.canid_line_pos_index[can_id]
-        if line_number not in can_line_pos:
-            can_line_pos[line_number] = len(self.canid_lines_index[can_id])
-            self.canid_lines_index[can_id].append(line_number)
+#         # [can-id].append(line)
+#         can_line_pos = self.canid_line_pos_index[can_id]
+#         if line_number not in can_line_pos:
+#             can_line_pos[line_number] = len(self.canid_lines_index[can_id])
+#             self.canid_lines_index[can_id].append(line_number)
 
-        # [can-id][signal_name].append(line/timestamp/raw/value)
-        signal_line_pos = self.signal_line_pos_index[can_id][signal_name]
-        signal_lines = self.signal_lines_index[can_id][signal_name]
-        signal_timestamps = self.signal_timestamps_index[can_id][signal_name]
-        signal_raw_values = self.signal_raw_values_index[can_id][signal_name]
-        signal_values = self.signal_values_index[can_id][signal_name]
+#         # [can-id][signal_name].append(line/timestamp/raw/value)
+#         signal_line_pos = self.signal_line_pos_index[can_id][signal_name]
+#         signal_lines = self.signal_lines_index[can_id][signal_name]
+#         signal_timestamps = self.signal_timestamps_index[can_id][signal_name]
+#         signal_raw_values = self.signal_raw_values_index[can_id][signal_name]
+#         signal_values = self.signal_values_index[can_id][signal_name]
 
-        if line_number in signal_line_pos:
-            idx = signal_line_pos[line_number]
-            signal_timestamps[idx] = timestamp
-            signal_raw_values[idx] = raw_value
-            signal_values[idx] = value
-        else:
-            signal_line_pos[line_number] = len(signal_lines)
-            signal_lines.append(line_number)
-            signal_timestamps.append(timestamp)
-            signal_raw_values.append(raw_value)
-            signal_values.append(value)
+#         if line_number in signal_line_pos:
+#             idx = signal_line_pos[line_number]
+#             signal_timestamps[idx] = timestamp
+#             signal_raw_values[idx] = raw_value
+#             signal_values[idx] = value
+#         else:
+#             signal_line_pos[line_number] = len(signal_lines)
+#             signal_lines.append(line_number)
+#             signal_timestamps.append(timestamp)
+#             signal_raw_values.append(raw_value)
+#             signal_values.append(value)
 
-    def get_signal_metadata(
-        self,
-        can_id: int,
-        signal_name: str,
-    ) -> List[SignalMetadata]:
-        lines = self.signal_lines_index.get(can_id, {}).get(signal_name, [])
-        timestamps = self.signal_timestamps_index.get(can_id, {}).get(signal_name, [])
-        raw_values = self.signal_raw_values_index.get(can_id, {}).get(signal_name, [])
-        values = self.signal_values_index.get(can_id, {}).get(signal_name, [])
+#     def get_signal_metadata(
+#         self,
+#         can_id: int,
+#         signal_name: str,
+#     ) -> List[SignalMetadata]:
+#         lines = self.signal_lines_index.get(can_id, {}).get(signal_name, [])
+#         timestamps = self.signal_timestamps_index.get(can_id, {}).get(signal_name, [])
+#         raw_values = self.signal_raw_values_index.get(can_id, {}).get(signal_name, [])
+#         values = self.signal_values_index.get(can_id, {}).get(signal_name, [])
 
-        result: List[SignalMetadata] = []
-        for idx in range(len(lines)):
-            result.append(
-                SignalMetadata(
-                    timestamp=timestamps[idx],
-                    raw_value=raw_values[idx],
-                    value=values[idx],
-                )
-            )
-        return result
+#         result: List[SignalMetadata] = []
+#         for idx in range(len(lines)):
+#             result.append(
+#                 SignalMetadata(
+#                     timestamp=timestamps[idx],
+#                     raw_value=raw_values[idx],
+#                     value=values[idx],
+#                 )
+#             )
+#         return result
 
-    def get_messages_by_timestamp(self, st: float, target_search: List[CANLogLine]) -> List[CANLogLine]:
-        return self.get_messages_by_timestamp_range(st, st, target_search)
+#     def get_messages_by_timestamp(self, st: float, target_search: List[CANLogLine]) -> List[CANLogLine]:
+#         return self.get_messages_by_timestamp_range(st, st, target_search)
 
-    def get_all_can_ids(self) -> List[int]:
-        return self.can_ids
+#     def get_all_can_ids(self) -> List[int]:
+#         return self.can_ids
     
-    def get_all_lines(self) -> List[CANLogLine]:
-        return list(self.log_entries.values())
+#     def get_all_lines(self) -> List[CANLogLine]:
+#         return list(self.log_entries.values())
 
-    def get_file_name(self) -> str:
-        return self.file_name
+#     def get_file_name(self) -> str:
+#         return self.file_name
 
-    def set_color_for_lines(self, lines: List[CANLogLine], color: str):
-        internal_ids = {id(line) for _,line in self.log_entries.items()}
-        for line in lines:
-            if id(line) not in internal_ids:
-                LOG.critical("Skipping foreign CANLogLine object")
-                continue
-            line.set_color(color)
+#     def set_color_for_lines(self, lines: List[CANLogLine], color: str):
+#         internal_ids = {id(line) for _,line in self.log_entries.items()}
+#         for line in lines:
+#             if id(line) not in internal_ids:
+#                 LOG.critical("Skipping foreign CANLogLine object")
+#                 continue
+#             line.set_color(color)
 
-    def clear_color_for_lines(self, lines: List[CANLogLine]):
-        internal_ids = {id(line) for _,line in self.log_entries.items()}
-        for line in lines:
-            if id(line) not in internal_ids:
-                LOG.critical("Skipping foreign CANLogLine object")
-                continue
-            line.set_color("")
+#     def clear_color_for_lines(self, lines: List[CANLogLine]):
+#         internal_ids = {id(line) for _,line in self.log_entries.items()}
+#         for line in lines:
+#             if id(line) not in internal_ids:
+#                 LOG.critical("Skipping foreign CANLogLine object")
+#                 continue
+#             line.set_color("")
 
-    def get_timestamps_of_mux_signal_by_id(
-        self,
-        target_signal_names: Dict[int, List[str]],
-        cb: Callable
-        ) -> Dict[str, List[float]]:
-        result:  Dict[str, List[float]] = {}
-        #for can_id, signal_names in target_signal_names:
-        target_lines = self.get_messages_by_list_id([target_signal_names.keys()])
-        for i, line in enumerate(target_lines):
-            signals = line.message_obj.signals
-            for sig_name, _ in signals.items(): 
-                if sig_name in [target_signal_names.values()]:
-                    st = line.timestamp
-                    result[sig_name].append(st)
-        return result
+#     def get_timestamps_of_mux_signal_by_id(
+#         self,
+#         target_signal_names: Dict[int, List[str]],
+#         cb: Callable
+#         ) -> Dict[str, List[float]]:
+#         result:  Dict[str, List[float]] = {}
+#         #for can_id, signal_names in target_signal_names:
+#         target_lines = self.get_messages_by_list_id([target_signal_names.keys()])
+#         for i, line in enumerate(target_lines):
+#             signals = line.message_obj.signals
+#             for sig_name, _ in signals.items(): 
+#                 if sig_name in [target_signal_names.values()]:
+#                     st = line.timestamp
+#                     result[sig_name].append(st)
+#         return result
 
-    def get_timestamps_of_signal_by_list_ids(
-        self,
-        target_signal_names: Dict[int, List[str]]
-        ) -> Dict[str, List[float]]:
-        result: Dict[str, List[float]]  = defaultdict(list)
-        for i, (can_id, signal_names) in enumerate(target_signal_names.items()):
-            sts: List[float] = []
-            target_lines = self.get_messages_by_list_id([can_id])
-            sts = self.get_timestamps_of_target_log_line(target_lines)
-            for signal_name in signal_names:
-                result[signal_name] = sts
-        return result
+#     def get_timestamps_of_signal_by_list_ids(
+#         self,
+#         target_signal_names: Dict[int, List[str]]
+#         ) -> Dict[str, List[float]]:
+#         result: Dict[str, List[float]]  = defaultdict(list)
+#         for i, (can_id, signal_names) in enumerate(target_signal_names.items()):
+#             sts: List[float] = []
+#             target_lines = self.get_messages_by_list_id([can_id])
+#             sts = self.get_timestamps_of_target_log_line(target_lines)
+#             for signal_name in signal_names:
+#                 result[signal_name] = sts
+#         return result
 
-    def get_timestamps_of_target_log_line(
-        self,
-        target_log_lines: List[CANLogLine]
-        ) -> List[float]:
-        return [line.timestamp for line in target_log_lines]
+#     def get_timestamps_of_target_log_line(
+#         self,
+#         target_log_lines: List[CANLogLine]
+#         ) -> List[float]:
+#         return [line.timestamp for line in target_log_lines]
 
-    def get_signal_values_by_ids(
-        self, 
-        can_ids: List[int],
-        target_signal_names: List[str],
-        cb: Callable = None
-    ) -> Dict[str, List[Any]]:
-        result = {name: [] for name in target_signal_names}
-        for i, can_id in enumerate(can_ids):
-            target_msg_lines = self.get_messages_by_list_id([can_id])
-            for line in target_msg_lines:
-                # if line.message_obj.cal_signal_value() or True:
-                    signals = line.message_obj.signals
-                    for sig_name, sig in signals.items(): 
-                        if sig_name in target_signal_names:   
-                            val = sig.value
-                            result[sig_name].append(val)
-        return result
+#     def get_signal_values_by_ids(
+#         self, 
+#         can_ids: List[int],
+#         target_signal_names: List[str],
+#         cb: Callable = None
+#     ) -> Dict[str, List[Any]]:
+#         result = {name: [] for name in target_signal_names}
+#         for i, can_id in enumerate(can_ids):
+#             target_msg_lines = self.get_messages_by_list_id([can_id])
+#             for line in target_msg_lines:
+#                 # if line.message_obj.cal_signal_value() or True:
+#                     signals = line.message_obj.signals
+#                     for sig_name, sig in signals.items(): 
+#                         if sig_name in target_signal_names:   
+#                             val = sig.value
+#                             result[sig_name].append(val)
+#         return result
 
-    def get_messages_by_list_signal_raw_value(
-        self,
-        signal_search: Dict[SignalName, List[int]],
-        can_ids: List[int] = None,
-    ) -> List[CANLogLine]:
-        if not can_ids:
-            raise KeyError("Either can_ids or target_search_lines must be provided")
-        target_search_lines = self.get_messages_by_list_id(can_ids)
-        return self.get_signals_by_list_signal_raw_value(signal_search, target_search_lines)
+#     def get_messages_by_list_signal_raw_value(
+#         self,
+#         signal_search: Dict[SignalName, List[int]],
+#         can_ids: List[int] = None,
+#     ) -> List[CANLogLine]:
+#         if not can_ids:
+#             raise KeyError("Either can_ids or target_search_lines must be provided")
+#         target_search_lines = self.get_messages_by_list_id(can_ids)
+#         return self.get_signals_by_list_signal_raw_value(signal_search, target_search_lines)
     
-    def get_signals_by_list_signal_raw_value(
-            self,
-            signal_search: Dict[SignalName, List[int]],
-            target_search_lines: List[CANLogLine]
-            ):
-        result = []
-        signal_search: Dict[SignalName, List[int]] = {}
+#     def get_signals_by_list_signal_raw_value(
+#             self,
+#             signal_search: Dict[SignalName, List[int]],
+#             target_search_lines: List[CANLogLine]
+#             ):
+#         result = []
+#         signal_search: Dict[SignalName, List[int]] = {}
         
-        for entry in target_search_lines:
-            # if entry.message_obj.cal_signal_value() or True:
-                for signal_name in entry.message_obj.signals:
-                    if signal_name in signal_search:
-                        if entry.message_obj.signals[signal_name].raw_value is None:
-                            result.append(entry)
-                        elif entry.message_obj.signals[signal_name].raw_value in signal_search[signal_name]:
-                            result.append(entry)
-                            break
-        return result
+#         for entry in target_search_lines:
+#             # if entry.message_obj.cal_signal_value() or True:
+#                 for signal_name in entry.message_obj.signals:
+#                     if signal_name in signal_search:
+#                         if entry.message_obj.signals[signal_name].raw_value is None:
+#                             result.append(entry)
+#                         elif entry.message_obj.signals[signal_name].raw_value in signal_search[signal_name]:
+#                             result.append(entry)
+#                             break
+#         return result
 
-    """
-    This method shall return a list of references to the result CANLogLine
-    """
-    def get_messages_by_list_id(
-        self, 
-        can_ids: List[int], 
-        target_search_lines: List[CANLogLine] = None,
-        ) -> List["CANLogLine"]:
-        if target_search_lines:
-            return [entry for entry in target_search_lines if entry.can_id in can_ids]
-        else:
-            return [entry for _, entry in self.log_entries.items() if entry.can_id in can_ids]
+#     """
+#     This method shall return a list of references to the result CANLogLine
+#     """
+#     def get_messages_by_list_id(
+#         self, 
+#         can_ids: List[int], 
+#         target_search_lines: List[CANLogLine] = None,
+#         ) -> List["CANLogLine"]:
+#         if target_search_lines:
+#             return [entry for entry in target_search_lines if entry.can_id in can_ids]
+#         else:
+#             return [entry for _, entry in self.log_entries.items() if entry.can_id in can_ids]
 
-    def get_dict_messages_by_list_id(
-        self,
-        can_ids: List[int],
-        target_search_lines: List[CANLogLine] | None = None,
-    ) -> Dict[int, List[CANLogLine]]:
+#     def get_dict_messages_by_list_id(
+#         self,
+#         can_ids: List[int],
+#         target_search_lines: List[CANLogLine] | None = None,
+#     ) -> Dict[int, List[CANLogLine]]:
 
-        result: Dict[int, List[CANLogLine]] = defaultdict(list)
+#         result: Dict[int, List[CANLogLine]] = defaultdict(list)
 
-        source = target_search_lines if target_search_lines is not None \
-                else self.log_entries.values()
+#         source = target_search_lines if target_search_lines is not None \
+#                 else self.log_entries.values()
 
-        for entry in source:
-            if entry.can_id in can_ids:
-                result[entry.can_id].append(entry)
+#         for entry in source:
+#             if entry.can_id in can_ids:
+#                 result[entry.can_id].append(entry)
 
-        return dict(result)
+#         return dict(result)
 
-    def group_messages_by_can_id(
-        self,
-        target_search_lines: List[CANLogLine],
-    ) -> Dict[int, List[CANLogLine]]:
+#     def group_messages_by_can_id(
+#         self,
+#         target_search_lines: List[CANLogLine],
+#     ) -> Dict[int, List[CANLogLine]]:
 
-        grouped: Dict[int, List[CANLogLine]] = defaultdict(list)
+#         grouped: Dict[int, List[CANLogLine]] = defaultdict(list)
 
-        for entry in target_search_lines:
-            grouped[entry.can_id].append(entry)
+#         for entry in target_search_lines:
+#             grouped[entry.can_id].append(entry)
 
-        return dict(grouped)
+#         return dict(grouped)
 
 
-    def filter_messages_by_list_id(self, can_ids: List[int]) -> List[CANLogLine]:
-        return [entry for line, entry in self.log_entries.items() if entry.can_id not in can_ids]
+#     def filter_messages_by_list_id(self, can_ids: List[int]) -> List[CANLogLine]:
+#         return [entry for line, entry in self.log_entries.items() if entry.can_id not in can_ids]
 
-    def get_messages_change_by_list_id(self, can_ids: List[int]) -> List[CANLogLine]:
-        return [entry for line, entry in self.log_entries.items() if (entry.can_id in can_ids) and (entry.changed)]
+#     def get_messages_change_by_list_id(self, can_ids: List[int]) -> List[CANLogLine]:
+#         return [entry for line, entry in self.log_entries.items() if (entry.can_id in can_ids) and (entry.changed)]
 
-    def get_messages_by_direction(self, direction: str, search_region: List[CANLogLine] = None):
-        return [entry for entry in search_region if entry.direction.lower() == direction.lower()]
+#     def get_messages_by_direction(self, direction: str, search_region: List[CANLogLine] = None):
+#         return [entry for entry in search_region if entry.direction.lower() == direction.lower()]
     
-    def get_messages_by_channel(self, channel: str, search_region: List[CANLogLine] = None):
-        if search_region:
-            return [entry for entry in search_region if  entry.channel == channel]
-        else:
-            return [entry for _, entry in self.log_entries.items() if entry.channel == channel]
+#     def get_messages_by_channel(self, channel: str, search_region: List[CANLogLine] = None):
+#         if search_region:
+#             return [entry for entry in search_region if  entry.channel == channel]
+#         else:
+#             return [entry for _, entry in self.log_entries.items() if entry.channel == channel]
     
-    def get_messages_by_timestamp_range(
-        self,
-        from_t: float, 
-        to_t: float, 
-        search_region: List[CANLogLine] = None
-        ) -> List[CANLogLine]:
-        if not search_region:
-            search_region = list(self.log_entries.values())
-        return [entry for entry in search_region if entry.timestamp >= from_t and entry.timestamp <= to_t]
+#     def get_messages_by_timestamp_range(
+#         self,
+#         from_t: float, 
+#         to_t: float, 
+#         search_region: List[CANLogLine] = None
+#         ) -> List[CANLogLine]:
+#         if not search_region:
+#             search_region = list(self.log_entries.values())
+#         return [entry for entry in search_region if entry.timestamp >= from_t and entry.timestamp <= to_t]
     
-    def get_can_ids(self, search_region: List[CANLogLine]) -> Set[int]:
-        if not search_region:
-            return set()
-        return {entry.can_id for entry in search_region}
+#     def get_can_ids(self, search_region: List[CANLogLine]) -> Set[int]:
+#         if not search_region:
+#             return set()
+#         return {entry.can_id for entry in search_region}
 
 
 

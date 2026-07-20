@@ -54,3 +54,12 @@ src/canapp/pyqt/
 # git mv platform/setup_rt_linux.sh setup_rt_linux.sh && 
 # git status --porcelain && 
 # git commit -m "Move platform modules to lw/ root (git mv)" || true
+
+src/file_service/repository/data/
+src/canapp/data/
+*.mmap
+/build/
+src/file_service/cpp/build/
+/logs/
+*.so
+*.bak

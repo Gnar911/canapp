@@ -1,19 +1,42 @@
 from __future__ import annotations
 
 from typing import List, Any
-from PySide6.QtCore import Signal, Slot, QTimer
+from PySide6.QtCore import Signal, Slot, QTimer, QObject
 from dataclasses import dataclass, replace
 from copy import deepcopy
 
-from .base_view_model import BaseViewModel
-from fs_test.mock_vm import ParseModel
-from cs_test.mock_vm import *
-from file_service.application_events import ParserStatusEvent, DBCLoadedEvent
-from file_service.status import ParserStatus
-from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, CA
+# from .base_view_model import BaseViewModel
+
+""" NOTE BUG 20270720 Cost 1h to fix:
+    cansrv package is installed as a PEP 660 editable install that uses a dynamic import finder, not a static path. 
+    import __editable___cansrv_0_1_0_finder; __editable___cansrv_0_1_0_finder.install()
+    Python interpreter: executes that .pth → runs the finder → cansrv resolves. ✅ (that's why every terminal import works)
+Pylance/Pyright: does static analysis. It never executes .pth code — it only reads .pth files that contain literal directory paths. 
+So it has literally no idea where cansrv lives → "could not be resolved." ❌
+-> Pyright + setuptools-strict-editable incompatibility.
+
+1. Reinstalled cansrv in compat editable mode → pip now writes a plain static .pth (.../cansrv/src) that Pylance reads:
+-> python3 -m pip install -e . --config-settings editable_mode=compat 2>&1 | tail -n 20
+
+2. Made cansrv.test a real subpackage via symlink so runtime and Pylance agree:
+-> ln -s ../../test project/cansrv/src/cansrv/test
+
+3. Simplified the extraPaths in canapp/.vscode/settings.json and project/.vscode/settings.json to just cansrv/src (safety net).
+
+-> workk immediately with reload VSCode
+
+cansrv was installed with setuptools' strict editable mode, which writes a .pth that is actually executable code running a dynamic import finder:
+import __editable___cansrv_0_1_0_finder; __editable___cansrv_0_1_0_finder.install()
+"""
+from cansrv.test.mock_vm import *
+# from file_service.application_events import ParserStatusEvent, DBCLoadedEvent
+# from file_service.status import ParserStatus
+# from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
+from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
+from cansrv.status import ParserStatus
+from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
 # from file_service.module.fs_core import LogRecord
 from canapp.data_object import CANLogLine, DecodedSignalLine
-from can_service.srv_status import ResponseACK, NotificationEvent
 from typing import Literal
 from lw.logger_setup import LOG
 
@@ -147,7 +170,7 @@ class FilterState:
     channel: ChannelFilter | None = None
     time: TimeFilter | None = None
 
-class LogViewModel(BaseViewModel, ParseModel):
+class LogViewModel(QObject, ParseModel, DBCModel):
     progressChanged = Signal()
     stateChanged = Signal()
 
@@ -174,7 +197,7 @@ class LogViewModel(BaseViewModel, ParseModel):
         self._metadata: MetaDataStorageInterface | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(100)
-        self._timer.timeout.connect(lambda: self.stateChanged.emit())
+        self._timer.timeout.connect(lambda: self.progressChanged.emit())
         self._timer.stop()
 
         """ View -> Model state View data type, could do 2 ways binding"""
@@ -183,12 +206,14 @@ class LogViewModel(BaseViewModel, ParseModel):
         self._editing_line: dict[RowId, CANLogLine] = {}
         self._viewport = (0, 100)
         self._auto_fetch: bool = False
+        self._editable_mode: bool = False
+
     @property
-    def editing_line(self):
+    def editingLine(self):
         return self._editing_line
 
-    @editing_line.setter
-    def editing_line(self, value):
+    @editingLine.setter
+    def editingLine(self, value):
         if self._editing_line == value:
             return
 
@@ -196,15 +221,30 @@ class LogViewModel(BaseViewModel, ParseModel):
         self.stateChanged.emit()
 
     @property
-    def autoFetch(self):
+    def autoFetch(self) -> bool:
         return self._auto_fetch
 
     @autoFetch.setter
-    def autoFetch(self, value):
+    def autoFetch(self, value: bool) -> None:
         if self._auto_fetch == value:
             return
+        # Cannot enable auto-fetch while editing.
+        self._auto_fetch = value and not self._editable_mode
+        self.stateChanged.emit()
+        
+    @property
+    def editableMode(self) -> bool:
+        return self._editable_mode
 
-        self._auto_fetch = value
+    @editableMode.setter
+    def editableMode(self, value: bool) -> None:
+        if self._editable_mode == value:
+            return
+        # Entering editable mode forces auto-fetch off.
+        if value:
+            self._auto_fetch = False
+
+        self._editable_mode = value
         self.stateChanged.emit()
 
     @property
@@ -372,7 +412,7 @@ class LogViewModel(BaseViewModel, ParseModel):
         #self.state = status
 
     def on_dbc_loaded(self, event: DBCLoadedEvent):
-        #self._dbc_info = event.candb_info
+        DBCModel.on_dbc_model_loaded(event=event)
         self.dbc_id = event.dbc_id
             
     """ Transition state change to running or idle"""
@@ -466,6 +506,7 @@ class LogViewModel(BaseViewModel, ParseModel):
     #         self._editing_line.clear()
     #         self.stateChanged.emit()
     
+    """ NOTE: entries = f(database, log_id, viewport, filter, dbc_id)"""
     @property
     def entries(self) -> list[CANLogLine]:
         if self.log_id is None:

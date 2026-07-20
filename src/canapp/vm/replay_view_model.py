@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
-from PySide6.QtCore import Property, Signal, Slot
+from PySide6.QtCore import Property, Signal, Slot, QObject
+from cs_test.mock_vm import *
+from cansrv.can_srv import CANService
+from cansrv.file_service import LogId
+from fs_test.mock_vm import ParseModel, DBCModel
+from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
+from cansrv.status import ParserStatus
+from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId
+from typing import TypeAlias
+from cansrv.can_srv import CANDeviceInfo
+from lw.srv_event import SrvEvent
 
-from .base_view_model import BaseViewModel
-
+""" NOTE: State machine define region"""
 @dataclass(frozen=True)
 class LoopForever:
     pass
@@ -19,211 +28,417 @@ class TimeScope:
     start_ts: float
     end_ts: float
 
-class ReplayState(Enum):
-    NONE = auto() # deterministic default when replay source is unavailable
-    IDLE_WAIT = auto() # state after finish or not start
-    PLAYING = auto() # state after resume
-    PAUSED = auto() # state after pause
+@dataclass(frozen=True, slots=True)
+class Empty:
+    """
+    No replay source has been selected.
+    """
+    pass
 
-@dataclass(slots=True, frozen=True)
-class ReplayWorkerState(DomainEvent):
-    source: Optional[Record]
-    mode: LoopForever | Repeat
-    registered_channels: tuple[int, ...] # register/unregister channel state
-    replay_state: ReplayState
-    current_index: int
-    current_cycle: int
-    total_rows: int
-    ignored_msg_ids: tuple[int, ...]
-    time_scope: Optional[TimeScope] # is at timesope state or not
-    last_cmd: ReplayCmdEvent
+@dataclass(frozen=True, slots=True)
+class Ready:
+    """
+    A source exists and is ready to play.
+    """
+    source: LogId
+
+
+@dataclass(frozen=True, slots=True)
+class Playing:
+    """
+    A source is actively being replayed.
+    """
+    source: LogId
+
+
+@dataclass(frozen=True, slots=True)
+class Paused:
+    """
+    Replay is paused, but the source remains active.
+    """
+    source: LogId
+
+ReplayState: TypeAlias = Empty | Ready | Playing | Paused
     
-class ReplayViewModel(BaseViewModel):
+@dataclass(slots=True)
+class ReplayConfig:
+    mode: LoopForever | Repeat
+    ignored_msg_ids: tuple[int, ...] = ()
+    time_scope: TimeScope | None = None
+
+
+class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatusVM, DBCModel):
     replayStateChanged = Signal()
     progressChanged = Signal()
-    currentRecordIdChanged = Signal()
-    loopEnabledChanged = Signal()
-    repeatCountChanged = Signal()
-    filterMsgIdsChanged = Signal()
-    timeScopeChanged = Signal()
-    lastStatusChanged = Signal()
-    lastErrorChanged = Signal()
+    dbcChanged = Signal()
 
-    def __init__(self, can_service: Any, event_types: dict[str, type] | None = None):
-        super().__init__(event_types=event_types)
-        self._can_service = can_service
+    def __init__(self):
+        super().__init__()
+        self._can_service = CANService()
+        # self._source: Optional[LogId]
+        # self._mode: LoopForever | Repeat
+        # self.is_play:  bool = False
+        # self.is_pause: bool = False
+        # self.ignored_msg_ids: tuple[int, ...]
+        # self.time_scope: Optional[TimeScope] # is at timesope state or not
 
-        self._replay_state = "Stopped"
-        self._progress = 0.0
-        self._current_record_id = -1
-        self._loop_enabled = False
-        self._repeat_count = 1
-        self._filter_msg_ids: list[int] = []
-        self._time_scope = {"startTs": None, "endTs": None}
-        self._last_status: dict[str, Any] = {}
-        self._last_error = ""
+        self._dbc_id: DBCId | None = None
+        self._state: ReplayState = Empty()
+        self._config = ReplayConfig(
+            mode=LoopForever(),
+        )
+        self._current_cycle = 0
+        self._is_active = True
+        #current_index: int
+        #current_cycle: int
+        #total_rows: int
 
-        self._subscribe_event(self._can_service, "ReplayStartedEvent", self._on_started)
-        self._subscribe_event(self._can_service, "ReplayStoppedEvent", self._on_stopped)
-        self._subscribe_event(self._can_service, "ReplayPausedEvent", self._on_paused)
-        self._subscribe_event(self._can_service, "ReplayResumedEvent", self._on_resumed)
-        self._subscribe_event(self._can_service, "ReplayProgressEvent", self._on_progress)
-        self._subscribe_event(self._can_service, "ReplayStatusEvent", self._on_status)
-        self._subscribe_event(self._can_service, "ReplayFailedEvent", self._on_failed)
+        self._available_devices: list[CANDeviceInfo] = []
+        self._acquired_devices: list[CANDeviceInfo] = []
 
-    @Property(str, notify=replayStateChanged)
-    def replayState(self) -> str:
-        return self._replay_state
+    """ State Machine"""
+    @property
+    def available_devices(self):
+        return self._available_devices
+    @property
+    def acquired_devices(self):
+        return self._acquired_devices
+    
+    @acquired_devices.setter
+    def acquired_devices(self, value):
+        if self._acquired_devices == value:
+            return
 
-    @Property(float, notify=progressChanged)
-    def progress(self) -> float:
-        return self._progress
+        self._acquired_devices = value
+        self.deviceStateChanged.emit()
 
-    @Property(int, notify=currentRecordIdChanged)
-    def currentRecordId(self) -> int:
-        return self._current_record_id
+    @available_devices.setter
+    def available_devices(self, value):
+        if self._available_devices == value:
+            return
 
-    @Property(bool, notify=loopEnabledChanged)
-    def loopEnabled(self) -> bool:
-        return self._loop_enabled
+        self._available_devices = value
+        self.deviceStateChanged.emit()
 
-    @Property(int, notify=repeatCountChanged)
-    def repeatCount(self) -> int:
-        return self._repeat_count
+    @property
+    def is_active(self):
+        return self._is_active
 
-    @Property("QVariantList", notify=filterMsgIdsChanged)
-    def filterMsgIds(self) -> list[int]:
-        return self._filter_msg_ids
+    @is_active.setter
+    def is_active(self, value):
+        if self._is_active == value:
+            return
+                                                             
+        self._is_active = value
+        self.replayStateChanged.emit()
 
-    @Property("QVariantMap", notify=timeScopeChanged)
-    def timeScope(self) -> dict[str, float | None]:
-        return self._time_scope
+    @property
+    def state(self):
+        return self._state
 
-    @Property("QVariantMap", notify=lastStatusChanged)
-    def lastStatus(self) -> dict[str, Any]:
-        return self._last_status
+    @state.setter
+    def state(self, value):
+        if self._state == value:
+            return
+                                                             
+        self._state = value
+        self.replayStateChanged.emit()
 
-    @Property(str, notify=lastErrorChanged)
-    def lastError(self) -> str:
-        return self._last_error
+    @property
+    def config(self):
+        return self._config
 
-    @Slot(int, result=bool)
-    def startReplay(self, record_id: int) -> bool:
-        ok = bool(self._can_service.start_replay(record_id))
-        if ok:
-            self._set_if_changed(self, "_current_record_id", record_id, self.currentRecordIdChanged)
-            self._set_if_changed(self, "_replay_state", "Running", self.replayStateChanged)
-            self._set_if_changed(self, "_last_error", "", self.lastErrorChanged)
-        else:
-            self._set_if_changed(self, "_last_error", f"Failed to start replay: {record_id}", self.lastErrorChanged)
-        return ok
+    @config.setter
+    def config(self, value):
+        if self._config == value:
+            return
+                                                             
+        self._config = value
+        self.replayStateChanged.emit()
 
-    @Slot(result=bool)
-    def stopReplay(self) -> bool:
-        ok = bool(self._can_service.stop_replay())
-        if ok:
-            self._set_if_changed(self, "_replay_state", "Stopped", self.replayStateChanged)
-            self._set_if_changed(self, "_progress", 0.0, self.progressChanged)
-        return ok
+    @property
+    def dbc_id(self):
+        return self._dbc_id
 
-    @Slot(result=bool)
-    def pauseReplay(self) -> bool:
-        ok = bool(self._can_service.pause_replay())
-        if ok:
-            self._set_if_changed(self, "_replay_state", "Paused", self.replayStateChanged)
-        return ok
+    @dbc_id.setter
+    def dbc_id(self, value):
+        if self._dbc_id == value:
+            return
 
-    @Slot(result=bool)
-    def resumeReplay(self) -> bool:
-        ok = bool(self._can_service.resume_replay())
-        if ok:
-            self._set_if_changed(self, "_replay_state", "Running", self.replayStateChanged)
-        return ok
+        self._dbc_id = value
+        self.dbcChanged.emit()
 
-    @Slot(bool, result=bool)
-    def setLoop(self, enabled: bool) -> bool:
-        ok = bool(self._can_service.set_loop(enabled))
-        if ok:
-            self._set_if_changed(self, "_loop_enabled", enabled, self.loopEnabledChanged)
-        return ok
+    @property
+    def current_cycle(self):
+        return self._current_cycle
 
-    @Slot(int, result=bool)
-    def setRepeat(self, count: int) -> bool:
-        ok = bool(self._can_service.set_repeat(count))
-        if ok:
-            self._set_if_changed(self, "_repeat_count", count, self.repeatCountChanged)
-        return ok
+    @current_cycle.setter
+    def current_cycle(self, value):
+        if self._current_cycle == value:
+            return
 
-    @Slot("QVariantList", result=bool)
-    def setMsgIdFilter(self, msg_ids: list[int]) -> bool:
+        self._current_cycle = value
+        self.dbcChanged.emit()
+
+
+    def on_dbc_loaded(self, event: DBCLoadedEvent):
+        DBCModel.on_dbc_model_loaded(event=event)
+        """ NOTE: re-evaluate only the DBC name on the filter table"""
+        self.dbc_id = event.dbc_id
+
+    def on_parser_status(self, event: ParserStatusEvent):
+        ParseModel.on_parser_status(self, event)
+        status = ParserStatus(int(event.status))
+        if status != ParserStatus.DONE:
+            source = event.log_id
+            assert source is not None
+            """ NOTE: User load the file into the log view panel, auto set it to the replay service"""
+            self._can_service.set_source(source)
+
+    def on_send_status(self, event: SrvEvent) -> None:
+        SendStatusVM.on_send_status(event)
+        evt = event
+        if isinstance(evt, SndClear):
+            self.is_active = False
+
+        if isinstance(evt, SndAdd):
+            self.is_active = True
+        
+    def on_replay_status(self, event: SrvEvent) -> None:
+        ReplayStatusVM.on_replay_status(self, event)
+        evt = event
+
+        if isinstance(evt, ReplaySetSource):
+            self.current_cycle = 0
+            self.state = Ready(source=evt.source)
+            return
+
+        if isinstance(evt, RplFinished):
+            if isinstance(self.state, (Playing, Paused)):
+                self.state = Ready(source=self.state.source)
+            return
+
+        if isinstance(evt, RplCycleFinished):
+            self.current_cycle = int(evt.cycle_th)
+            return
+
+        if evt == ReplayCmdType.START or evt == ReplayCmdType.RESUME:
+            if isinstance(self.state, (Ready, Paused)):
+                self.state = Playing(source=self.state.source)
+            return
+
+        if evt == ReplayInterruptCmdType.PAUSE:
+            if isinstance(self.state, Playing):
+                self.state = Paused(source=self.state.source)
+            return
+
+        if evt == ReplayInterruptCmdType.STOP:
+            if isinstance(self.state, (Playing, Paused)):
+                self.state = Ready(source=self.state.source)
+            self.current_cycle = 0
+
+            return
+
+        if evt == ReplayInterruptCmdType.UNSET_SOURCE:
+            self._current_cycle = 0
+            self.state = Empty()
+            return
+
+        if isinstance(evt, ReplaySetLoop):
+            self.config = ReplayConfig(
+                mode=LoopForever() if bool(evt.enabled) else Repeat(count=1),
+                ignored_msg_ids=self.config.ignored_msg_ids,
+                time_scope=self.config.time_scope,
+            )
+            return
+
+        if isinstance(evt, ReplaySetRepeat):
+            self.config = ReplayConfig(
+                mode=Repeat(count=max(1, int(evt.count))),
+                ignored_msg_ids=self.config.ignored_msg_ids,
+                time_scope=self.config.time_scope,
+            )
+            return
+
+        if isinstance(evt, ReplaySetFilterMsg):
+            self.config = ReplayConfig(
+                mode=self.config.mode,
+                ignored_msg_ids=tuple(int(v) for v in evt.msg_ids),
+                time_scope=self.config.time_scope,
+            )
+            return
+
+        if isinstance(evt, ReplaySetTimescope):
+            time_scope: TimeScope | None
+            if evt.start_ts is None or evt.end_ts is None:
+                time_scope = None
+            else:
+                time_scope = TimeScope(
+                    start_ts=float(evt.start_ts),
+                    end_ts=float(evt.end_ts),
+                )
+            self.config = ReplayConfig(
+                mode=self.config.mode,
+                ignored_msg_ids=self.config.ignored_msg_ids,
+                time_scope=time_scope,
+            )
+            return
+        
+    def on_scan_status(self, payload: SrvEvent) -> None:
+        ScannerVM.on_scan_status(payload)
+        if isinstance(payload, ScanDevicePluggedStatus):
+            # NOTE: avoid duplicate add when repeated plug notifications arrive
+            if payload.device_info not in self.available_devices:
+                self.available_devices.append(payload.device_info)
+            return
+
+        if isinstance(payload, ScanDeviceUnpluggedStatus):
+            device = payload.device_info
+
+            self.available_devices = [
+                d for d in self.available_devices
+                if d.device_id != device.device_id
+            ]
+
+            self.acquired_devices = [
+                d for d in self.acquired_devices
+                if d.device_id != device.device_id
+            ]
+            return
+
+        if isinstance(payload, ScanChannelAcquiredStatus):
+            device = payload.device_info
+            self.available_devices.remove(device)
+            self.acquired_devices.append(device)
+            return
+
+        if isinstance(payload, ScanChannelReleasedStatus):
+            device = payload.device_info
+            self.acquired_devices.remove(device)
+            self.available_devices.append(device)
+            return
+                
+    """ NOTE: There is no button to set source on the replay screen -> this API View should not existed"""
+    # def setSource(self, record_id: LogId) -> bool:
+    #     self._can_service.set_source(record_id)
+
+    """ NOTE: Button start replay"""
+    @Slot()
+    def startReplay(self) -> None:
+        self._can_service.start_replay()
+        return None
+
+    """ NOTE: Button stop replay"""
+    @Slot()
+    def stopReplay(self) -> None:
+        self._can_service.stop_replay()
+        return None
+
+    """ NOTE: Button pause replay"""
+    @Slot()
+    def pauseReplay(self) -> None:
+        self._can_service.pause_replay()
+        return None
+
+    @Slot()
+    def resumeReplay(self) -> None:
+        self._can_service.resume_replay()
+        return None
+
+    @Slot(bool)
+    def setLoop(self, enabled: bool) -> None:
+        self._can_service.set_loop(enabled)
+        return None
+
+    @Slot(int)
+    def setRepeat(self, count: int) -> None:
+        self._can_service.set_repeat(count)
+        return None
+
+    @Slot("QVariantList")
+    def setMsgIdFilter(self, msg_ids: list[int]) -> None:
         ids = [int(v) for v in msg_ids]
-        ok = bool(self._can_service.set_msg_id_filter(ids))
-        if ok:
-            self._set_if_changed(self, "_filter_msg_ids", ids, self.filterMsgIdsChanged)
-        return ok
+        self._can_service.set_msg_id_filter(ids)
+        return None
 
-    @Slot(result=bool)
-    def clearMsgIdFilter(self) -> bool:
-        ok = bool(self._can_service.set_msg_id_filter(None))
-        if ok:
-            self._set_if_changed(self, "_filter_msg_ids", [], self.filterMsgIdsChanged)
-        return ok
+    @Slot()
+    def clearMsgIdFilter(self) -> None:
+        self._can_service.set_msg_id_filter(None)
+        return None
 
-    @Slot(float, float, result=bool)
-    def setTimeScope(self, start_ts: float, end_ts: float) -> bool:
-        ok = bool(self._can_service.set_time_scope(start_ts, end_ts))
-        if ok:
-            scope = {"startTs": start_ts, "endTs": end_ts}
-            self._set_if_changed(self, "_time_scope", scope, self.timeScopeChanged)
-        return ok
+    @Slot(float, float)
+    def setTimeScope(self, start_ts: float, end_ts: float) -> None:
+        self._can_service.set_time_scope(start_ts, end_ts)
+        return None
 
-    @Slot(result=bool)
-    def clearTimeScope(self) -> bool:
-        ok = bool(self._can_service.set_time_scope(None, None))
-        if ok:
-            self._set_if_changed(self, "_time_scope", {"startTs": None, "endTs": None}, self.timeScopeChanged)
-        return ok
+    @Slot()
+    def clearTimeScope(self) -> None:
+        self._can_service.set_time_scope(None, None)
+        return None
 
-    @Slot(result="QVariantMap")
-    def refreshStatus(self) -> dict[str, Any]:
-        status = dict(self._can_service.get_replay_status(refresh=True, timeout_s=1.0))
-        self._apply_status(status)
-        return status
+    @property
+    def isReplay(self) -> bool:
+        return isinstance(self.state, Playing)
 
-    def _apply_status(self, status: dict[str, Any]) -> None:
-        self._set_if_changed(self, "_last_status", status, self.lastStatusChanged)
+    @property
+    def isStop(self) -> bool:
+        return isinstance(self.state, (Empty, Ready))
 
-        progress = float(status.get("progress", self._progress))
-        self._set_if_changed(self, "_progress", progress, self.progressChanged)
+    @property
+    def isPause(self) -> bool:
+        return isinstance(self.state, Paused)
 
-        state = status.get("state")
-        if state is not None:
-            self._set_if_changed(self, "_replay_state", str(state), self.replayStateChanged)
+    @property
+    def isHavingRecord(self) -> bool:
+        return self.record_id is not None
+    
+    @property
+    def isActive(self) -> bool:
+        return self.is_active
+    
+    @property
+    def isEmptyRecord(self) -> bool:
+        return self.record_id is None
 
-    def _on_started(self, event: Any) -> None:
-        record_id = getattr(event, "record_id", getattr(event, "id", self._current_record_id))
-        self._set_if_changed(self, "_current_record_id", int(record_id), self.currentRecordIdChanged)
-        self._set_if_changed(self, "_replay_state", "Running", self.replayStateChanged)
+    @property
+    def msgFilterList(self) -> list[int]:
+        # UI list-box view of ignored message IDs
+        return list(self.config.ignored_msg_ids)
 
-    def _on_stopped(self, _: Any) -> None:
-        self._set_if_changed(self, "_replay_state", "Stopped", self.replayStateChanged)
-        self._set_if_changed(self, "_progress", 0.0, self.progressChanged)
+    @property
+    def hasMsgFilter(self) -> bool:
+        return len(self.config.ignored_msg_ids) > 0
 
-    def _on_paused(self, _: Any) -> None:
-        self._set_if_changed(self, "_replay_state", "Paused", self.replayStateChanged)
+    @property
+    def timeScopeRange(self) -> tuple[float, float] | None:
+        scope = self.config.time_scope
+        if scope is None:
+            return None
+        return (float(scope.start_ts), float(scope.end_ts))
 
-    def _on_resumed(self, _: Any) -> None:
-        self._set_if_changed(self, "_replay_state", "Running", self.replayStateChanged)
+    @property
+    def hasTimeScope(self) -> bool:
+        return self.config.time_scope is not None
 
-    def _on_progress(self, event: Any) -> None:
-        progress = float(getattr(event, "progress", 0.0))
-        self._set_if_changed(self, "_progress", progress, self.progressChanged)
+    @property
+    def isLoopOn(self) -> bool:
+        return isinstance(self.config.mode, LoopForever)
 
-    def _on_status(self, event: Any) -> None:
-        status = getattr(event, "status", None)
-        if isinstance(status, dict):
-            self._apply_status(status)
+    @property
+    def setCycle(self) -> int:
+        mode = self.config.mode
+        if isinstance(mode, Repeat):
+            return max(1, int(mode.count))
+        # loop-forever has no fixed upper cycle count
+        return 0
 
-    def _on_failed(self, event: Any) -> None:
-        message = str(getattr(event, "message", "Replay operation failed"))
-        self._set_if_changed(self, "_last_error", message, self.lastErrorChanged)
+    @property
+    def currentCycle(self) -> int:
+        return int(self.current_cycle)
+
+    @property
+    def totalFrames(self) -> int:
+        if self.metadata is None:
+            return 0
+        return self.metadata.fetch_count()
+
