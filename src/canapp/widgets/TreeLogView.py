@@ -26,6 +26,7 @@ from canapp.vm.log_viewmodel import (
     LogViewModel,
 )
 from PySide6.QtWidgets import QTreeView, QScrollBar, QHBoxLayout
+from lw.logger_setup import LOG
 
 class LogViewModel_QtAdapter(QAbstractItemModel):
     COL_TREND = 0
@@ -46,11 +47,25 @@ class LogViewModel_QtAdapter(QAbstractItemModel):
         super().__init__(parent)
 
         self._vm = view_model
+        self._vm.browseChanged.connect(
+        self._reevaluate
+        )
+        self._vm.commonStateChanged.connect(
+        self._reevaluate
+        )
+
+        """ BUG: Need to cache to avoid un-controllable re-evaluation from Qt Tree"""
         self._entries: list[CANLogLine] = []
 
+        """ BUG: """
         self._reevaluate()
 
-    def _reevaluate(self) -> None:
+    # @property
+    # def entries(self) -> list[CANLogLine]:
+    #     return self._entries
+    
+    def _reevaluate(self):
+        # LOG.debug("Re-eval")
         entries = self._vm.entries
 
         self.beginResetModel()
@@ -458,11 +473,6 @@ class TreeLogView(QWidget):
             self._HOVER_STYLESHEET
         )
 
-        self.scrollbar = QScrollBar(
-            Qt.Orientation.Vertical,
-            self,
-        )
-
         layout = QHBoxLayout(self)
 
         layout.setContentsMargins(
@@ -478,64 +488,70 @@ class TreeLogView(QWidget):
             self.view
         )
 
-        layout.addWidget(
-            self.scrollbar
-        )
+        # self.scrollbar = QScrollBar(
+        #     Qt.Orientation.Vertical,
+        #     self,
+        # )
 
-        self.scrollbar.valueChanged.connect(
-            self._on_scroll
-        )
 
-        self._vm.stateChanged.connect(
-            self._on_state_changed
-        )
+        # layout.addWidget(
+        #     self.scrollbar
+        # )
 
-        self._sync_scrollbar()
+    #     self.scrollbar.valueChanged.connect(
+    #         self._on_scroll
+    #     )
 
-    def _on_scroll(
-        self,
-        first: int,
-    ) -> None:
-        _, count = self._vm.viewport
+    #     self._vm.stateChanged.connect(
+    #         self._on_state_changed
+    #     )
 
-        self._vm.viewport = (
-            first,
-            count,
-        )
+    #     self._sync_scrollbar()
 
-    def _on_state_changed(
-        self,
-    ) -> None:
-        self.model_._reevaluate()
-        self._sync_scrollbar()
+    # def _on_scroll(
+    #     self,
+    #     first: int,
+    # ) -> None:
+    #     _, count = self._vm.viewport
 
-    def _sync_scrollbar(
-        self,
-    ) -> None:
-        first, count = self._vm.viewport
+    #     self._vm.viewport = (
+    #         first,
+    #         count,
+    #     )
 
-        maximum = max(
-            self._vm.totalLines - count,
-            0,
-        )
+    # def _on_state_changed(
+    #     self,
+    # ) -> None:
+    #     self.model_._reevaluate()
+    #     self._sync_scrollbar()
 
-        self.scrollbar.blockSignals(True)
+    # def _sync_scrollbar(
+    #     self,
+    # ) -> None:
+    #     first, count = self._vm.viewport
 
-        self.scrollbar.setRange(
-            0,
-            maximum,
-        )
+    #     maximum = max(
+    #         self._vm.totalLines - count,
+    #         0,
+    #     )
 
-        self.scrollbar.setPageStep(
-            count
-        )
+    #     self.scrollbar.blockSignals(True)
 
-        self.scrollbar.setSingleStep(
-            1
-        )
+    #     self.scrollbar.setRange(
+    #         0,
+    #         maximum,
+    #     )
 
-        self.scrollbar.setValue(
-            min(first, maximum)
-        )
+    #     self.scrollbar.setPageStep(
+    #         count
+    #     )
 
-        self.scrollbar.blockSignals(False)
+    #     self.scrollbar.setSingleStep(
+    #         1
+    #     )
+
+    #     self.scrollbar.setValue(
+    #         min(first, maximum)
+    #     )
+
+    #     self.scrollbar.blockSignals(False)
