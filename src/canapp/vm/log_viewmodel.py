@@ -7,7 +7,7 @@ from copy import deepcopy
 
 # from .base_view_model import BaseViewModel
 
-""" NOTE BUG 20260720 Cost 1h to fix:
+""" NOTE BUG 20260720:
     cansrv package is installed as a PEP 660 editable install that uses a dynamic import finder, not a static path. 
     import __editable___cansrv_0_1_0_finder; __editable___cansrv_0_1_0_finder.install()
     Python interpreter: executes that .pth → runs the finder → cansrv resolves. ✅ (that's why every terminal import works)
@@ -29,13 +29,9 @@ cansrv was installed with setuptools' strict editable mode, which writes a .pth 
 import __editable___cansrv_0_1_0_finder; __editable___cansrv_0_1_0_finder.install()
 """
 from cansrv.test.mock_vm import *
-# from file_service.application_events import ParserStatusEvent, DBCLoadedEvent
-# from file_service.status import ParserStatus
-# from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
 from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
 from cansrv.status import ParserStatus
 from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, ViewBrowser, LogQuery
-# from file_service.module.fs_core import LogRecord
 from canapp.data_object import CANLogLine, DecodedSignalLine
 from typing import Literal
 from lw.logger_setup import LOG
@@ -183,7 +179,6 @@ class DirectionFilter:
 class ChannelFilter:
     channels: List[str]
 
-
 @dataclass(frozen=True)
 class TimeFilter:
     first_ts: float
@@ -221,6 +216,13 @@ class FilterState:
             query.has_time_range = True
 
         return query
+    
+    def reset(self):
+        self.direction = None
+        self.message = None
+        self.signal = None
+        self.channel = None
+        self.time = None
 
 class LogViewModel(QObject, ParseModel, DBCModel):
     progressChanged = Signal()
@@ -272,6 +274,20 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         #self._viewport = (0, 100)
         self._auto_fetch: bool = False   
         self._editable_mode: bool = False
+        self._undo_filter: bool = True
+
+    @property
+    def undoFilter(self):
+        return self._undo_filter
+
+    @undoFilter.setter
+    def undoFilter(self, value):
+        if self._undo_filter == value:
+            return
+
+        self._undo_filter = value
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
 
     """ NOTE: Qt Tree will auto re-evaluate for it"""
     @property
@@ -314,18 +330,6 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
         self._editing_line = value
         self.commonStateChanged.emit()
-
-    # @property
-    # def autoFetch(self) -> bool:
-    #     return self._auto_fetch
-
-    # @autoFetch.setter
-    # def autoFetch(self, value: bool) -> None:
-    #     if self._auto_fetch == value:
-    #         return
-    #     # Cannot enable auto-fetch while editing.
-    #     self._auto_fetch = value and not self._editable_mode
-    #     self.commonStateChanged.emit()
         
     @property
     def editableMode(self) -> bool:
@@ -507,17 +511,20 @@ class LogViewModel(QObject, ParseModel, DBCModel):
     #     if get_file_service().save_log_edits(self.log_id, entry_updates):
     #         self._editing_line.clear()
     #         self.commonStateChanged.emit()
-    
+
     @property
     def messageFilter(self):
         return self._filter.message
 
     @messageFilter.setter
-    def messageFilter(self, value: MsgFilter):
-        self._filter = replace(
-            self._filter,
-            message=value,
-        )
+    def messageFilter(self, value: MsgFilter | NoFilter):
+        if isinstance(value, MsgFilter):
+            self._filter = replace(
+                self._filter,
+                message=value,
+            )
+        elif isinstance(value, NoFilter):
+            self._filter.reset()
         self._lazy_count = 0
 
         """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
@@ -528,9 +535,8 @@ class LogViewModel(QObject, ParseModel, DBCModel):
     def directionFilter(self):
         return self._filter.direction
 
-
     @directionFilter.setter
-    def directionFilter(self, value: DirectionFilter):
+    def directionFilter(self, value: DirectionFilter | NoFilter):
         self._filter = replace(
             self._filter,
             direction=value,

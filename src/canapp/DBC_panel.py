@@ -7,29 +7,68 @@ from PySide6.QtCore import Qt, Slot
 from pathlib import Path
 import re
 from typing import Optional
-from ui_sdk.components.pyqt.basic_component.ReadonlyListbox import ReadOnlyListWidget
-from ui_sdk.components.pyqt.basic_component.CollapsibleSection import CollapsibleSection
-from can_sdk.dbc_manager import CANDBManager, SignalFilter
-from can_sdk.logger_setup import LOG, setup_logger
-from can_sdk.global_event import event_on_signal_select
+from canapp.widgets.basic_component.ReadonlyListbox import ReadOnlyListWidget
+from canapp.widgets.basic_component.CollapsibleSection import CollapsibleSection
+from canapp.vm.dbc_view_model import DbcViewModel, ListModel
+from lw.logger_setup import LOG
+# from can_sdk.logger_setup import LOG, setup_logger
+# from can_sdk.global_event import event_on_signal_select
 
 SUPPORTED_EXT = {".asc", ".log", ".txt", ".csv", ".blf", ".xls", ".xlsx"}
 
 class CANDBCPanel(QWidget):
-    def __init__(self, parent, model: CANDBManager):
+    def __init__(self, parent, model: DbcViewModel):
         super().__init__(parent)
-        self.my_model = model          # CANDBManager
-        self.cur_sig: SignalFilter = None
+        self.vm = model          # CANDBManager
+        # self.cur_sig: SignalFilter = None
         self._last_mode: Optional[str] = None
-        self.my_model.event_on_db_changed.subscribe(self.on_event_db_select_changed)
-        self.my_model.event_on_db_list_changed.subscribe(self.on_event_db_list_changed)
 
         self._build_ui()
-        self._bind_events()
 
-        # initial sync
-        self.on_event_db_select_changed()
-        self.on_event_db_list_changed()
+        self.btn_load_db.clicked.connect(self.on_btn_load_candb_clicked)
+
+        self.status_can_db.currentIndexChanged.connect(
+            lambda _: setattr(
+                self.vm,
+                "dbc_id",
+                self.status_can_db.currentData(
+                    ListModel.ItemRole
+                ),
+            )
+        )
+        self.tb_msg_filter.textChanged.connect(
+            lambda text: setattr(self.vm, "msgFilter", text)
+        )
+
+        self.tb_signal_filter.textChanged.connect(
+            lambda text: setattr(self.vm, "sigFilter", text)
+        )
+        # toggle global search refresh
+        # try:
+        #     self.cb_signal_global.stateChanged.connect(lambda _: self.update_signal_list(self.tb_signal_filter.text()))
+        # except Exception:
+        #     pass
+        self.lb_msg_list.currentRowChanged.connect(
+            lambda _: setattr(
+                self.vm,
+                "curMessage",
+                self.lb_msg_list.currentIndex().data(
+                    ListModel.ItemRole
+                ),
+            )
+        )
+
+        self.lb_signal_list.currentRowChanged.connect(
+            lambda _: setattr(
+                self.vm,
+                "curSignal",
+                self.lb_signal_list.currentIndex().data(
+                    ListModel.ItemRole
+                ),
+            )
+        )
+        self.vm.dbcChanged.connect(self._reevaluate)
+        self._reevaluate()
 
     # ------------------------------------------------------------------
     # UI
@@ -46,6 +85,12 @@ class CANDBCPanel(QWidget):
 
         # ---- Combobox (under the button) ----
         self.status_can_db = QComboBox()
+        self.status_can_db.setModel(
+            self.vm.dbcs
+        )
+        self.status_can_db.setModel(self.vm)
+        self.status_can_db.setModelColumn(0)
+
         self.status_can_db.setEditable(True)
         self.status_can_db.setSizePolicy(
             QSizePolicy.Ignored,
@@ -95,8 +140,10 @@ class CANDBCPanel(QWidget):
         self.tb_msg_filter.setClearButtonEnabled(True)
         self.tb_msg_filter.setMinimumWidth(0)
         self.lb_msg_list = QListWidget(self.msg_panel)
+        self.lb_msg_list.setModel(self.vm.messages)
         self.lb_msg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.lb_msg_list.setMinimumWidth(0)
+
         self.lb_msg_title = QLabel("CAN Message List", self.msg_panel)
         self.msg_panel_layout.addWidget(self.lb_msg_title)
         self.msg_panel_layout.addWidget(self.tb_msg_filter)
@@ -113,6 +160,7 @@ class CANDBCPanel(QWidget):
         self.tb_signal_filter.setClearButtonEnabled(True)
         self.tb_signal_filter.setMinimumWidth(0)
         self.lb_signal_list = QListWidget(self.sig_panel)
+        self.lb_msg_list.setModel(self.vm.signals)
         self.lb_signal_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.lb_signal_list.setMinimumWidth(0)
 
@@ -136,30 +184,30 @@ class CANDBCPanel(QWidget):
         self._lists_layout.addWidget(self.msg_panel, 1)
         self._lists_layout.addWidget(self.sig_panel, 1)
 
-        # ---- CAN ID collision inspector ----
-        self.section_collision = CollapsibleSection("CAN ID Collision Inspector")
-        collision_layout = QVBoxLayout()
+        # # ---- CAN ID collision inspector ----
+        # self.section_collision = CollapsibleSection("CAN ID Collision Inspector")
+        # collision_layout = QVBoxLayout()
 
-        self.lb_collision_hint = QLabel(
-            "Displays CAN IDs shared by messages from different loaded DBC files"
-        )
+        # self.lb_collision_hint = QLabel(
+        #     "Displays CAN IDs shared by messages from different loaded DBC files"
+        # )
 
-        self.collision_scroll = QScrollArea()
-        self.collision_scroll.setWidgetResizable(True)
-        self.collision_scroll.setMinimumHeight(0)
-        self.collision_scroll.setMaximumHeight(220)
+        # self.collision_scroll = QScrollArea()
+        # self.collision_scroll.setWidgetResizable(True)
+        # self.collision_scroll.setMinimumHeight(0)
+        # self.collision_scroll.setMaximumHeight(220)
 
-        self.collision_container = QWidget()
-        self.collision_container_layout = QVBoxLayout(self.collision_container)
-        self.collision_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.collision_container_layout.setSpacing(8)
-        self.collision_container_layout.addStretch(1)
-        self.collision_scroll.setWidget(self.collision_container)
+        # self.collision_container = QWidget()
+        # self.collision_container_layout = QVBoxLayout(self.collision_container)
+        # self.collision_container_layout.setContentsMargins(0, 0, 0, 0)
+        # self.collision_container_layout.setSpacing(8)
+        # self.collision_container_layout.addStretch(1)
+        # self.collision_scroll.setWidget(self.collision_container)
 
-        collision_layout.addWidget(self.lb_collision_hint)
-        collision_layout.addWidget(self.collision_scroll, 1)
-        self.section_collision.setContentLayout(collision_layout)
-        self.section_collision.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # collision_layout.addWidget(self.lb_collision_hint)
+        # collision_layout.addWidget(self.collision_scroll, 1)
+        # self.section_collision.setContentLayout(collision_layout)
+        # self.section_collision.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         self._db_layout.addWidget(self._lists_container, 1)
         self._db_layout.addWidget(self.section_collision, 0)
@@ -191,132 +239,67 @@ class CANDBCPanel(QWidget):
         self._apply_layout_mode(mode)
 
     # ------------------------------------------------------------------
-    # Bindings
-    # ------------------------------------------------------------------
-    def _bind_events(self):
-        self.btn_load_db.clicked.connect(self.on_btn_load_candb_clicked)
-        # self.btn_load_logs.clicked.connect(self.on_btn_add_logs_clicked)
-        # self.btn_load_log.clicked.connect(self.on_btn_load_log_clicked)
-        # self.btn_delete_log.clicked.connect(self.on_btn_delete_log_clicked)
-
-        self.status_can_db.currentIndexChanged.connect(self.on_cbx_db_selected)
-
-        self.tb_msg_filter.textChanged.connect(self.on_msg_filter_change)
-        self.tb_signal_filter.textChanged.connect(self.on_signal_filter_change)
-        # toggle global search refresh
-        try:
-            self.cb_signal_global.stateChanged.connect(lambda _: self.update_signal_list(self.tb_signal_filter.text()))
-        except Exception:
-            pass
-
-        self.lb_msg_list.currentRowChanged.connect(self.on_msg_selected)
-        self.lb_signal_list.currentRowChanged.connect(self.on_signal_selected)
-
-    # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
-
-    def update_total_message_label(self):
-        size = self.my_model.get_messages_len(self.my_model.get_main_db_file())
-        self.total_msg_label.setText(f"Total messages: {size}")
-
-    def on_event_db_list_changed(self):
-        LOG.debug("on_event_db_list_changed")
-        self.update_total_message_label()
-
-        cbx = self.status_can_db
-        cbx.blockSignals(True)
-        cbx.clear()
-
-        all_db_files = self.my_model.get_list_all_db_filename()
-
-        if not all_db_files:
-            cbx.addItem("None")
-            cbx.setCurrentIndex(0)
-            cbx.blockSignals(False)
-            return
-
-        cbx.addItems(all_db_files)
-
-        cur_item = self.my_model.get_main_db_filename()
-        LOG.debug(f"Current main db: {cur_item}")
-
-        if cur_item in all_db_files:
-            cbx.setCurrentIndex(all_db_files.index(cur_item))
-        else:
-            cbx.setCurrentIndex(0)
-
-        cbx.blockSignals(False)
-        self.update_collision_inspector()
-
-    def on_event_contexts_list_changed(self, ctx=None):
-        pass
-
-    def on_event_db_select_changed(self):
+    def _reevaluate(self):
+        # LOG.debug("Re-eval")
+        self.total_msg_label.setText(f"Total messages: {self.vm.dbcMessagesCount}")
         self.lb_msg_list.clear()
         self.lb_signal_list.clear()
-
-        all_db = self.my_model.get_list_all_db_filename()
-        self.btn_load_db.setText("Add CAN DBC" if len(all_db) == 1 else "Load CAN DBC")
-
-        if all_db:
-            self.update_msg_list()
-            self.update_total_message_label()
-
-        self.update_collision_inspector()
+        self.lb_msg_list.addItems(self.vm.messagesList)
+        self.lb_signal_list.addItems(self.vm.signalList)
 
     # ------------------------------------------------------------------
     # Message / Signal Logic
     # ------------------------------------------------------------------
-    def update_msg_list(self, filter_text=""):
-        self.lb_msg_list.clear()
-        self.lb_signal_list.clear()
+    # def update_msg_list(self, filter_text=""):
+    #     self.lb_msg_list.clear()
+    #     self.lb_signal_list.clear()
 
-        if self.my_model.is_mixed_selected():
-              data = self.my_model.get_mixed_messages_view()
-        else:
-            data = self.my_model.messages_view
-        LOG.debug(f"total {len(data)} messages")
-        filtered = self._filtered_list(data, filter_text)
-        self.lb_msg_list.addItems(filtered)
+    #     if self.vm.is_mixed_selected():
+    #           data = self.vm.get_mixed_messages_view()
+    #     else:
+    #         data = self.vm.messages_view
+    #     #LOG.debug(f"total {len(data)} messages")
+    #     filtered = self._filtered_list(data, filter_text)
+    #     self.lb_msg_list.addItems(filtered)
 
-    def update_signal_list(self, filter_text=""):
-        self.lb_signal_list.clear()
-        # Determine mode: global if checkbox checked, otherwise local if message selected
-        use_global = getattr(self, 'cb_signal_global', None) and self.cb_signal_global.isChecked()
+    # def update_signal_list(self, filter_text=""):
+    #     self.lb_signal_list.clear()
+    #     # Determine mode: global if checkbox checked, otherwise local if message selected
+    #     use_global = getattr(self, 'cb_signal_global', None) and self.cb_signal_global.isChecked()
 
-        # Global mode: skip local message logic entirely
-        if not use_global:
-            msg = self.cur_sig.msg_info if self.cur_sig else None
+    #     # Global mode: skip local message logic entirely
+    #     if not use_global:
+    #         msg = self.cur_sig.msg_info if self.cur_sig else None
 
-            # If a message is selected -> search within that message
-            if msg:
-                signals = msg.signals
-                view = [f"{s.start} - {s.length}: {s.name}" for s in signals]
-                filtered = self._filtered_list(view, filter_text)
-                self.lb_signal_list.addItems(filtered)
-            return
+    #         # If a message is selected -> search within that message
+    #         if msg:
+    #             signals = msg.signals
+    #             view = [f"{s.start} - {s.length}: {s.name}" for s in signals]
+    #             filtered = self._filtered_list(view, filter_text)
+    #             self.lb_signal_list.addItems(filtered)
+    #         return
 
-        # Global mode: search across all messages
-        items = []
-        try:
-            candb = self.my_model.candb
-            for frm_id, msg_obj in candb.messages.items():
-                msg_list = msg_obj if isinstance(msg_obj, list) else [msg_obj]
-                for message in msg_list:
-                    for s in message.signals:
-                        item = f"[{frm_id:03X}] {message.name} - {s.name}"
-                        items.append(item)
-        except Exception:
-            return
+    #     # Global mode: search across all messages
+    #     items = []
+    #     try:
+    #         candb = self.vm.candb
+    #         for frm_id, msg_obj in candb.messages.items():
+    #             msg_list = msg_obj if isinstance(msg_obj, list) else [msg_obj]
+    #             for message in msg_list:
+    #                 for s in message.signals:
+    #                     item = f"[{frm_id:03X}] {message.name} - {s.name}"
+    #                     items.append(item)
+    #     except Exception:
+    #         return
 
-        filtered = self._filtered_list(items, filter_text)
-        self.lb_signal_list.addItems(filtered)
+    #     filtered = self._filtered_list(items, filter_text)
+    #     self.lb_signal_list.addItems(filtered)
 
 
     def on_btn_load_candb_clicked(self):
         LOG.debug("Click add candb button")
-
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Load CAN DBC",
@@ -327,228 +310,216 @@ class CANDBCPanel(QWidget):
         if not file_path:
             return
 
+        self.vm.loadDBC(file_path)
+
         # Load or add database
-        if not self.my_model.get_main_db_file():
-            res = self.my_model.load_database(file_path)
-        else:
-            res = self.my_model.load_database(file_path)
+        # if not self.vm.get_main_db_file():
+        #     res = self.vm.load_database(file_path)
+        # else:
+        #     res = self.vm.load_database(file_path)
+        # if res and len(res) > 0:
+        #     QMessageBox.information(
+        #         self,
+        #         "Database Add Completed",
+        #         f"Have {len(res)} messages be added to current Database"
+        #     )
+        #     self.vm.set_main_db_file(file_path)
+        # else:
+        #     QMessageBox.information(
+        #         self,
+        #         "Database Already Existed",
+        #         "Have 0 messages be added to current Database"
+        #     )
 
-        if res and len(res) > 0:
-            QMessageBox.information(
-                self,
-                "Database Add Completed",
-                f"Have {len(res)} messages be added to current Database"
-            )
-            self.my_model.set_main_db_file(file_path)
-        else:
-            QMessageBox.information(
-                self,
-                "Database Already Existed",
-                "Have 0 messages be added to current Database"
-            )
+    # def update_collision_inspector(self):
+    #     if not self.vm.is_mixed_selected():
+    #         self.section_collision.setVisible(False)
+    #         return
 
-    def update_collision_inspector(self):
-        if not self.my_model.is_mixed_selected():
-            self.section_collision.setVisible(False)
-            return
+    #     self.section_collision.setVisible(True)
+    #     self._clear_collision_blocks()
 
-        self.section_collision.setVisible(True)
-        self._clear_collision_blocks()
+    #     collisions = self.vm.get_mixed_can_id_collisions()
+    #     if not collisions:
+    #         self.lb_collision_hint.setText("No duplicated CAN IDs found in mixed database")
+    #         return
 
-        collisions = self.my_model.get_mixed_can_id_collisions()
-        if not collisions:
-            self.lb_collision_hint.setText("No duplicated CAN IDs found in mixed database")
-            return
+    #     self.lb_collision_hint.setText(
+    #         f"Found {len(collisions)} duplicated CAN IDs in mixed database"
+    #     )
 
-        self.lb_collision_hint.setText(
-            f"Found {len(collisions)} duplicated CAN IDs in mixed database"
-        )
+    #     for can_id in sorted(collisions.keys()):
+    #         entries = collisions[can_id]
+    #         file_count = len({file_name for file_name, _ in entries})
 
-        for can_id in sorted(collisions.keys()):
-            entries = collisions[can_id]
-            file_count = len({file_name for file_name, _ in entries})
+    #         can_group = QGroupBox(f"CAN ID [{can_id:03X}] ({len(entries)} messages in {file_count} files)")
+    #         can_layout = QVBoxLayout(can_group)
+    #         can_layout.setContentsMargins(6, 6, 6, 6)
+    #         can_layout.setSpacing(6)
 
-            can_group = QGroupBox(f"CAN ID [{can_id:03X}] ({len(entries)} messages in {file_count} files)")
-            can_layout = QVBoxLayout(can_group)
-            can_layout.setContentsMargins(6, 6, 6, 6)
-            can_layout.setSpacing(6)
+    #         option_group = QButtonGroup(can_group)
+    #         option_group.setExclusive(True)
 
-            option_group = QButtonGroup(can_group)
-            option_group.setExclusive(True)
+    #         for file_name, msg_name in entries:
+    #             option_text = f"[{can_id:03X}] <{msg_name}> <{file_name}>"
+    #             rb = QRadioButton(option_text)
+    #             rb.toggled.connect(
+    #                 lambda checked, cid=can_id, m=msg_name, f=file_name: (
+    #                     self.on_collision_option_selected(cid, m, f) if checked else None
+    #                 )
+    #             )
+    #             option_group.addButton(rb)
+    #             can_layout.addWidget(rb)
 
-            for file_name, msg_name in entries:
-                option_text = f"[{can_id:03X}] <{msg_name}> <{file_name}>"
-                rb = QRadioButton(option_text)
-                rb.toggled.connect(
-                    lambda checked, cid=can_id, m=msg_name, f=file_name: (
-                        self.on_collision_option_selected(cid, m, f) if checked else None
-                    )
-                )
-                option_group.addButton(rb)
-                can_layout.addWidget(rb)
+    #         rb_none = QRadioButton("None")
+    #         rb_none.setChecked(True)
+    #         option_group.addButton(rb_none)
+    #         can_layout.addWidget(rb_none)
 
-            rb_none = QRadioButton("None")
-            rb_none.setChecked(True)
-            option_group.addButton(rb_none)
-            can_layout.addWidget(rb_none)
+    #         self.collision_container_layout.insertWidget(
+    #             self.collision_container_layout.count() - 1,
+    #             can_group
+    #         )
 
-            self.collision_container_layout.insertWidget(
-                self.collision_container_layout.count() - 1,
-                can_group
-            )
+    # def _clear_collision_blocks(self):
+    #     while self.collision_container_layout.count() > 1:
+    #         item = self.collision_container_layout.takeAt(0)
+    #         widget = item.widget()
+    #         if widget is not None:
+    #             widget.deleteLater()
 
-    def _clear_collision_blocks(self):
-        while self.collision_container_layout.count() > 1:
-            item = self.collision_container_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+    # def on_collision_option_selected(self, can_id: int, msg_name: str, file_name: str):
+    #     target_file = None
+    #     for path in self.vm.get_list_all_db_file() or []:
+    #         if Path(path).name == file_name:
+    #             target_file = path
+    #             break
 
-    def on_collision_option_selected(self, can_id: int, msg_name: str, file_name: str):
-        target_file = None
-        for path in self.my_model.get_list_all_db_file() or []:
-            if Path(path).name == file_name:
-                target_file = path
-                break
+    #     if target_file:
+    #         try:
+    #             self.vm.set_main_db_file(target_file)
+    #         except Exception as ex:
+    #             LOG.debug(f"Failed to set decode DBC '{target_file}': {ex}")
 
-        if target_file:
-            try:
-                self.my_model.set_main_db_file(target_file)
-            except Exception as ex:
-                LOG.debug(f"Failed to set decode DBC '{target_file}': {ex}")
-
-        display = f"[{can_id:03X}] {msg_name}"
-        try:
-            msgs = self.my_model.messages_view
-            if display in msgs:
-                idx = msgs.index(display)
-                self.lb_msg_list.blockSignals(True)
-                self.lb_msg_list.setCurrentRow(idx)
-                self.lb_msg_list.blockSignals(False)
-            self.on_msg_selected(self.lb_msg_list.currentRow())
-        except Exception as ex:
-            LOG.debug(f"Failed to select message '{display}' for decode: {ex}")
+    #     display = f"[{can_id:03X}] {msg_name}"
+    #     try:
+    #         msgs = self.vm.messages_view
+    #         if display in msgs:
+    #             idx = msgs.index(display)
+    #             self.lb_msg_list.blockSignals(True)
+    #             self.lb_msg_list.setCurrentRow(idx)
+    #             self.lb_msg_list.blockSignals(False)
+    #         self.on_msg_selected(self.lb_msg_list.currentRow())
+    #     except Exception as ex:
+    #         LOG.debug(f"Failed to select message '{display}' for decode: {ex}")
 
     # Mock collision data removed
 
 
-    # ------------------------------------------------------------------
-    # Slots
-    # ------------------------------------------------------------------
-    @Slot(int)
-    def on_cbx_db_selected(self, index: int):
-        LOG.debug("on_cbx_db_selected")
+    # @Slot(int)
+    # def on_msg_selected(self, row):
+    #     if row < 0:
+    #         return
 
-        files = self.my_model.get_list_all_db_file()
-        if 0 <= index < len(files):
-            selected_item = files[index]
-            self.my_model.set_main_db_file(selected_item)
+    #     text = self.lb_msg_list.item(row).text()
+    #     try:
+    #         can_id = int(text.split("]")[0].replace("[", ""), 16)
+    #         msg_name = text.split("]", 1)[1].strip() if "]" in text else ""
+    #     except Exception:
+    #         return
 
-
-    @Slot(int)
-    def on_msg_selected(self, row):
-        if row < 0:
-            return
-
-        text = self.lb_msg_list.item(row).text()
-        try:
-            can_id = int(text.split("]")[0].replace("[", ""), 16)
-            msg_name = text.split("]", 1)[1].strip() if "]" in text else ""
-        except Exception:
-            return
-
-        msg = self.my_model.get_message_by_id_and_name(can_id, msg_name)
-        if not msg:
-            return
+    #     msg = self.vm.get_message_by_id_and_name(can_id, msg_name)
+    #     if not msg:
+    #         return
         
-        self.cur_sig = SignalFilter(_msg_info = msg)
-        event_on_signal_select.notify(self.cur_sig)
+    #     self.cur_sig = SignalFilter(_msg_info = msg)
+    #     event_on_signal_select.notify(self.cur_sig)
 
-        # Auto-uncheck global checkbox when user clicks a message
-        if self.cb_signal_global.isChecked():
-            self.cb_signal_global.setChecked(False)
+    #     # Auto-uncheck global checkbox when user clicks a message
+    #     if self.cb_signal_global.isChecked():
+    #         self.cb_signal_global.setChecked(False)
 
-        self.update_signal_list()
+    #     self.update_signal_list()
 
-    @Slot(int)
-    def on_signal_selected(self, row):
-        if row < 0:
-            return
+    # @Slot(int)
+    # def on_signal_selected(self, row):
+    #     if row < 0:
+    #         return
 
-        text = self.lb_signal_list.item(row).text()
+    #     text = self.lb_signal_list.item(row).text()
 
-        # Format A (per-message): "start - length: name"
-        if ":" in text:
-            name = text.split(":", 1)[1].strip()
-            # self.my_model.get_signal()
-            self.my_model.update_selected_signal_info(name)
-            return
+    #     # Format A (per-message): "start - length: name"
+    #     if ":" in text:
+    #         name = text.split(":", 1)[1].strip()
+    #         # self.vm.get_signal()
+    #         self.vm.update_selected_signal_info(name)
+    #         return
 
-        # Format B (global): "[ID] MessageName - SignalName"
-        import re
-        m = re.match(r"\[([0-9A-Fa-f]+)\]\s*(.*)", text)
-        if m:
-            can_hex = m.group(1)
-            rest = m.group(2)
-            if " - " in rest:
-                sig_name = rest.split(" - ")[-1].strip()
-            else:
-                sig_name = rest.strip()
-            try:
-                can_id = int(can_hex, 16)
-                msg_name = rest.split(" - ")[0].strip() if " - " in rest else rest.strip()
-                # Manually select message in model WITHOUT triggering events
-                if can_id in self.my_model.candb.messages:
-                    msg_obj = self.my_model.get_message_by_id_and_name(can_id, msg_name)
-                    if not msg_obj:
-                        return
-                    sig = SignalFilter(_msg_info=msg_obj)
-                    self.cur_sig = sig
-                    event_on_signal_select.notify(sig)
+    #     # Format B (global): "[ID] MessageName - SignalName"
+    #     import re
+    #     m = re.match(r"\[([0-9A-Fa-f]+)\]\s*(.*)", text)
+    #     if m:
+    #         can_hex = m.group(1)
+    #         rest = m.group(2)
+    #         if " - " in rest:
+    #             sig_name = rest.split(" - ")[-1].strip()
+    #         else:
+    #             sig_name = rest.strip()
+    #         try:
+    #             can_id = int(can_hex, 16)
+    #             msg_name = rest.split(" - ")[0].strip() if " - " in rest else rest.strip()
+    #             # Manually select message in model WITHOUT triggering events
+    #             if can_id in self.vm.candb.messages:
+    #                 msg_obj = self.vm.get_message_by_id_and_name(can_id, msg_name)
+    #                 if not msg_obj:
+    #                     return
+    #                 sig = SignalFilter(_msg_info=msg_obj)
+    #                 self.cur_sig = sig
+    #                 event_on_signal_select.notify(sig)
                     
-                    # Visually highlight message in list without triggering slot
-                    display = f"[{msg_obj.frame_id:03X}] {msg_obj.name}"
-                    msgs = self.my_model.messages_view
-                    if display in msgs:
-                        idx = msgs.index(display)
-                        self.lb_msg_list.blockSignals(True)
-                        self.lb_msg_list.setCurrentRow(idx)
-                        self.lb_msg_list.blockSignals(False)
-            except Exception:
-                pass
-            self.my_model.update_selected_signal_info(sig_name)
-            return
+    #                 # Visually highlight message in list without triggering slot
+    #                 display = f"[{msg_obj.frame_id:03X}] {msg_obj.name}"
+    #                 msgs = self.vm.messages_view
+    #                 if display in msgs:
+    #                     idx = msgs.index(display)
+    #                     self.lb_msg_list.blockSignals(True)
+    #                     self.lb_msg_list.setCurrentRow(idx)
+    #                     self.lb_msg_list.blockSignals(False)
+    #         except Exception:
+    #             pass
+    #         self.vm.update_selected_signal_info(sig_name)
+    #         return
 
-        # Fallback: try to extract after colon
-        if ":" in text:
-            name = text.split(":", 1)[1].strip()
-            # self.my_model.update_selected_signal_info(name)
+    #     # Fallback: try to extract after colon
+    #     if ":" in text:
+    #         name = text.split(":", 1)[1].strip()
+    #         # self.vm.update_selected_signal_info(name)
 
     # ------------------------------------------------------------------
     # Filters
     # ------------------------------------------------------------------
-    def on_msg_filter_change(self, text):
-        if text == "Message Filter":
-            return
-        self.update_msg_list(text)
+    # def on_msg_filter_change(self, text):
+    #     if text == "Message Filter":
+    #         return
+    #     self.update_msg_list(text)
 
-    def on_signal_filter_change(self, text):
-        if text == "Signal Filter":
-            return
-        self.update_signal_list(text)
+    # def on_signal_filter_change(self, text):
+    #     if text == "Signal Filter":
+    #         return
+    #     self.update_signal_list(text)
 
     # ------------------------------------------------------------------
     # Utils
     # ------------------------------------------------------------------
-    def _filtered_list(self, data, text):
-        text = text.strip()
-        if not text:
-            return data
-        try:
-            pat = re.compile(text, re.IGNORECASE)
-            return [x for x in data if pat.search(x)]
-        except re.error:
-            return data
+    # def _filtered_list(self, data, text):
+    #     text = text.strip()
+    #     if not text:
+    #         return data
+    #     try:
+    #         pat = re.compile(text, re.IGNORECASE)
+    #         return [x for x in data if pat.search(x)]
+    #     except re.error:
+    #         return data
 
 if __name__ == "__main__":
     import sys
