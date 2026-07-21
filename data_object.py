@@ -516,12 +516,7 @@ class CANLogLine:
     """ If the parsed file have no message name -> Display one in DBC"""
     @property
     def message_name(self) -> str:
-        if not self.message_obj:
-            return ""
-        if getattr(self.message_obj, "msg_info", None) is None:
-            return ""
-        name = self.message_obj.message_name
-        return name if name is not None else ""
+        return self._user_message_name
         
     @message_name.setter
     def message_name(self, value: str):

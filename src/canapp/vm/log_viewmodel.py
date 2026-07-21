@@ -7,7 +7,7 @@ from copy import deepcopy
 
 # from .base_view_model import BaseViewModel
 
-""" NOTE BUG 20270720 Cost 1h to fix:
+""" NOTE BUG 20260720 Cost 1h to fix:
     cansrv package is installed as a PEP 660 editable install that uses a dynamic import finder, not a static path. 
     import __editable___cansrv_0_1_0_finder; __editable___cansrv_0_1_0_finder.install()
     Python interpreter: executes that .pth → runs the finder → cansrv resolves. ✅ (that's why every terminal import works)
@@ -34,7 +34,7 @@ from cansrv.test.mock_vm import *
 # from file_service.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
 from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
 from cansrv.status import ParserStatus
-from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
+from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, ViewBrowser, LogQuery
 # from file_service.module.fs_core import LogRecord
 from canapp.data_object import CANLogLine, DecodedSignalLine
 from typing import Literal
@@ -133,6 +133,34 @@ RowId = int
         ⇒ log_id == None
 """
 
+""" NOTE: this is the setter/getter for use internally as state changed, not expose to View
+There is usually no public setter for read-only state.
+in C#, WPF (.NET)
+public Metadata Metadata
+{
+    get => __metadata;
+    private set
+    {
+        __metadata = value;
+        OnPropertyChanged();
+    }
+}
+The View can read Metadata.
+Only the ViewModel can write it because the setter is private.
+    
+C++
+class VM {
+public:
+    const Metadata& _metadata() const;
+
+private:
+    void setMetadata(Metadata m);
+};
+Q_PROPERTY(Metadata _metadata
+        READ _metadata
+        NOTIFY _metadataChanged)
+"""
+
 @dataclass(frozen=True)
 class NoFilter:
     pass
@@ -161,7 +189,6 @@ class TimeFilter:
     first_ts: float
     last_ts: float
 
-
 @dataclass(frozen=True)
 class FilterState:
     direction: DirectionFilter | None = None
@@ -170,9 +197,40 @@ class FilterState:
     channel: ChannelFilter | None = None
     time: TimeFilter | None = None
 
+    def empty(self) -> bool:
+        return self == FilterState()
+
+    def to_query(self) -> LogQuery:
+        query = LogQuery()
+
+        if self.message is not None:
+            query.can_ids = self.message.can_ids
+            query.changed_only = self.message.changed
+
+        if self.channel is not None:
+            query.channels = self.channel.channels
+
+        if self.direction is not None:
+            query.directions = [
+                0 if self.direction.direction == "Rx" else 1
+            ]
+
+        if self.time is not None:
+            query.first_ts = self.time.first_ts
+            query.last_ts = self.time.last_ts
+            query.has_time_range = True
+
+        return query
+
 class LogViewModel(QObject, ParseModel, DBCModel):
     progressChanged = Signal()
-    stateChanged = Signal()
+
+    """ BUG: This is the common state changed, we update the trivial operation all at the same signal but this not good for
+            high performance operation such as load entries.
+    """
+    commonStateChanged = Signal()
+
+    browseChanged = Signal()
 
     def __init__(self):
 
@@ -190,11 +248,16 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
         Inital staet is idle, timer off
         """
-        self._state: ParserStatus | None = None
+        #self._state: ParserStatus | None = None
+        """ 20262107 BUG"""
+        self._srv_feedback = False
         self._log_id: LogId | None = None
         self._dbc_id: DBCId | None = None
 
         self._metadata: MetaDataStorageInterface | None = None
+        #self._view_browser: ViewBrowser | None = None
+        self._lazy_count = 0
+        self._row = 0
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(lambda: self.progressChanged.emit())
@@ -202,11 +265,43 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
         """ View -> Model state View data type, could do 2 ways binding"""
         self._page_size = 10000 
+        # Internal page index is zero-based; start on the first page.
+        self._page_num = 0
         self._filter: FilterState = FilterState()
         self._editing_line: dict[RowId, CANLogLine] = {}
-        self._viewport = (0, 100)
-        self._auto_fetch: bool = False
+        #self._viewport = (0, 100)
+        self._auto_fetch: bool = False   
         self._editable_mode: bool = False
+
+    """ NOTE: Qt Tree will auto re-evaluate for it"""
+    @property
+    def lazyCount(self) -> int:
+        return self._lazy_count
+
+    @lazyCount.setter
+    def lazyCount(self, value: int) -> None:
+        self._lazyCount = value
+
+    @property
+    def row(self) -> int:
+        return self._row
+
+    @row.setter
+    def row(self, value: int) -> None:
+        self._row = value
+
+    @property
+    def pageNum(self):
+        return self._page_num
+
+    @pageNum.setter
+    def pageNum(self, value):
+        if self._page_num == value:
+            return
+
+        self._page_num = value
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
 
     @property
     def editingLine(self):
@@ -218,19 +313,19 @@ class LogViewModel(QObject, ParseModel, DBCModel):
             return
 
         self._editing_line = value
-        self.stateChanged.emit()
+        self.commonStateChanged.emit()
 
-    @property
-    def autoFetch(self) -> bool:
-        return self._auto_fetch
+    # @property
+    # def autoFetch(self) -> bool:
+    #     return self._auto_fetch
 
-    @autoFetch.setter
-    def autoFetch(self, value: bool) -> None:
-        if self._auto_fetch == value:
-            return
-        # Cannot enable auto-fetch while editing.
-        self._auto_fetch = value and not self._editable_mode
-        self.stateChanged.emit()
+    # @autoFetch.setter
+    # def autoFetch(self, value: bool) -> None:
+    #     if self._auto_fetch == value:
+    #         return
+    #     # Cannot enable auto-fetch while editing.
+    #     self._auto_fetch = value and not self._editable_mode
+    #     self.commonStateChanged.emit()
         
     @property
     def editableMode(self) -> bool:
@@ -245,122 +340,22 @@ class LogViewModel(QObject, ParseModel, DBCModel):
             self._auto_fetch = False
 
         self._editable_mode = value
-        self.stateChanged.emit()
-
-    @property
-    def viewport(self):
-        return self._viewport
-
-    @viewport.setter
-    def viewport(self, value):
-        if self._viewport == value:
-            return
-
-        self._viewport = value
-        self.stateChanged.emit()
-
-    """ NOTE: View no need to care about construct full state so the ViewModel
-        will expose individual properties and use replace
-    """
-    # @property
-    # def filter(self):
-    #     return self._filter
-
-    # @filter.setter
-    # def filter(self, value):
-    #     if self._filter == value:
-    #         return
-
-    #     self._filter = value
-    #     self.stateChanged.emit()
-
-    @property
-    def messageFilter(self):
-        return self._filter.message
-
-    @messageFilter.setter
-    def messageFilter(self, value):
-        self._filter = replace(
-            self._filter,
-            message=value,
-        )
-        self.stateChanged.emit()
-
-    @property
-    def directionFilter(self):
-        return self._filter.direction
-
-    @directionFilter.setter
-    def directionFilter(self, value):
-        self._filter = replace(
-            self._filter,
-            direction=value,
-        )
-        self.stateChanged.emit()
+        self.commonStateChanged.emit()
 
     @property
     def pageSize(self):
         return self._page_size
 
-    """ THis settet are equal to a function callback that result in stateChanged"""
+    """ THis settet are equal to a function callback that result in commonStateChanged"""
     @pageSize.setter
     def pageSize(self, value):
         if self._page_size == value:
             return
 
         self._page_size = value
-        self.stateChanged.emit()
-
-    """ NOTE: this is the setter/getter for use internally as state changed, not expose to View
-    There is usually no public setter for read-only state.
-    in C#, WPF (.NET)
-    public Metadata Metadata
-    {
-        get => _metadata;
-        private set
-        {
-            _metadata = value;
-            OnPropertyChanged();
-        }
-    }
-    The View can read Metadata.
-    Only the ViewModel can write it because the setter is private.
-        
-    C++
-    class VM {
-    public:
-        const Metadata& metadata() const;
-
-    private:
-        void setMetadata(Metadata m);
-    };
-    Q_PROPERTY(Metadata metadata
-           READ metadata
-           NOTIFY metadataChanged)
-    """
-    @property
-    def metadata(self):
-        return self._metadata
-
-    @metadata.setter
-    def metadata(self, value):
-        if self._metadata == value:
-            return
-
-        self._metadata = value
-        self.stateChanged.emit()
-
-    @property
-    def state(self):
-        return self._state
-
-    @state.setter
-    def state(self, value):
-        if self._state == value:
-            return
-
-        self._state = value
-        self.stateChanged.emit()
+        self._page_num = 0
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
 
     """ NOTE: log_id would not be a two-way bound property """
     @property
@@ -369,11 +364,16 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     @log_id.setter
     def log_id(self, value):
-        if self._log_id == value:
+
+        """ 20262107 BUG: if 2 callback has the same log_id -> it not re-evaluate -> log_id only can only describe 2 state, start(done) and fail
+                while the state and done should also have been distinguigh
+        """
+        if self._log_id == value and not self._srv_feedback:
             return
 
         self._log_id = value
-        self.stateChanged.emit()
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
 
     @property
     def dbc_id(self):
@@ -385,31 +385,39 @@ class LogViewModel(QObject, ParseModel, DBCModel):
             return
 
         self._dbc_id = value
-        self.stateChanged.emit()
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
 
     """ Transition state change to done or failed, calback funcion for all the viewmodels"""
     def on_parser_status(self, event: ParserStatusEvent):
         ParseModel.on_parser_status(self, event)
         status = ParserStatus(int(event.status))
         log_id = event.log_id
+
+        """ BUG: """
         if status == ParserStatus.STARTED:
             if log_id is not None:
-                self.metadata = MetaDataStorageInterface(log_id.path_token())
+                self._metadata = MetaDataStorageInterface(log_id.path_token())
+                #self._view_browser = get_file_service().browse_all(log_id)
+                self._lazy_count = 0
+                self._srv_feedback = False
                 self._timer.start()
             else:
                 raise ValueError
         elif status == ParserStatus.FAILED:
             # if log_id is None:
             assert log_id is None
+            self._srv_feedback = True
             self._timer.stop()
             ### NOTE: close storage
-            self.metadata = None
+            self._metadata = None
+            self._lazy_count = 0
         elif status == ParserStatus.DONE:
             assert log_id is not None
+            self._srv_feedback = True
             self._timer.stop()
     
         self.log_id = log_id
-        #self.state = status
 
     def on_dbc_loaded(self, event: DBCLoadedEvent):
         DBCModel.on_dbc_model_loaded(event=event)
@@ -422,9 +430,9 @@ class LogViewModel(QObject, ParseModel, DBCModel):
     #     if log_id is None:
     #         self._timer.stop()
     #         ### NOTE: close storage
-    #         self.metadata = None
+    #         self._metadata = None
     #     else:
-    #         self.metadata = MetaDataStorageInterface(log_id.path_token())
+    #         self._metadata = MetaDataStorageInterface(log_id.path_token())
     #         self._timer.start()
         
     #     """ NOTE Notify state change here"""
@@ -439,9 +447,9 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     @property
     def logTimestampRange(self) -> tuple[float, float]:
-        if self.metadata is None:
+        if self._metadata is None:
             return (-1.0, -1.0)
-        ts = self.metadata.get_first_last_timestamp()
+        ts = self._metadata.get_first_last_timestamp()
         if ts is None:
             return (-1.0, -1.0)
         first_timestamp, last_timestamp = ts
@@ -452,7 +460,7 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     @property
     def defaultLogName(self) -> str:
-        if self.metadata is None:
+        if self._metadata is None:
             return ""
         #TODO
         return "ABCDXYZ"
@@ -464,12 +472,6 @@ class LogViewModel(QObject, ParseModel, DBCModel):
     @property
     def progressBarIsActive(self) -> bool:
         return self.log_id is not None
-
-    @property
-    def totalLines(self) -> int:
-        if self.metadata is None:
-            return 0
-        return self.metadata.fetch_count()
 
     # def save_edit(self) -> None:
     #     if not self.log_id:
@@ -504,60 +506,210 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     #     if get_file_service().save_log_edits(self.log_id, entry_updates):
     #         self._editing_line.clear()
-    #         self.stateChanged.emit()
+    #         self.commonStateChanged.emit()
     
-    """ NOTE: entries = f(database, log_id, viewport, filter, dbc_id)"""
     @property
-    def entries(self) -> list[CANLogLine]:
-        if self.log_id is None:
-            return []
+    def messageFilter(self):
+        return self._filter.message
 
-        first, count = self.viewport
+    @messageFilter.setter
+    def messageFilter(self, value: MsgFilter):
+        self._filter = replace(
+            self._filter,
+            message=value,
+        )
+        self._lazy_count = 0
 
-        if self.autoFetch:
-            first = max(self.totalLines - count, 0)
+        """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
 
-        f = self._filter
-        service = get_file_service()
+    @property
+    def directionFilter(self):
+        return self._filter.direction
 
-        can_ids = None
-        changed_only = False
-        channels = None
-        directions = None
-        time_range = None
 
-        if f.message is not None:
-            can_ids = list(f.message.can_ids)
-            changed_only = f.message.changed
+    @directionFilter.setter
+    def directionFilter(self, value: DirectionFilter):
+        self._filter = replace(
+            self._filter,
+            direction=value,
+        )
+        self._lazy_count = 0
 
-        if f.channel is not None:
-            channels = list(f.channel.channels)
+        """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
+        
+    """
+    NOTE: Lazy load version
+    """
+    @property
+    def entry(self) -> CANLogLine | None:
+        if self._metadata is None:
+            return None
+        
+        if self._filter.empty():
+            view_browser = self._metadata.browse_all()
+        else:
+            view_browser = self._metadata.browse(self._filter.to_query())
 
-        if f.direction is not None:
-            directions = [f.direction.direction]
+        if not 0 <= self._row < view_browser.size():
+            return None
 
-        if f.time is not None:
-            time_range = (f.time.first_ts, f.time.last_ts)
+        row = view_browser.at(
+            self._row
+        )
 
-        rows = service.read_page_filtered(
-            self.log_id,
-            first,
-            first + count,
-            can_ids=can_ids,
-            channels=channels,
-            directions=directions,
-            changed_only=changed_only,
-            time_range=time_range,
+        line = CANLogLine(
+            channel=str(row.channel),
+            can_id=int(row.can_id),
+            direction=str(row.direction),
+            data_len=row.data_len,
+            data=row.data,
+            changed=bool(row.changed),
+            line_number=int(row.line_number),
+            timestamp=float(row.timestamp),
+            last_timestamp=float(
+                row.last_timestamp
+            ),
         )
 
         db: CANDBInfo | None = None
-        # if not unload the DBC or load fail
+
         if self.dbc_id is not None:
-            db = get_file_service().get_candb_data(self.dbc_id)
+            db = get_file_service().get_candb_data(
+                self.dbc_id
+            )
+            
+        if db is not None:
+            result = db.decode_message(
+                line.can_id,
+                line.data,
+            )
+            message_def = (
+                db.get_message_by_frame_id(
+                    line.can_id
+                )
+            )
+
+            decoded_signals: list[
+                DecodedSignalLine
+            ] = []
+
+            if (
+                isinstance(result, dict)
+                and message_def is not None
+            ):
+                for sig_name, sig_value in result.items():
+                    sig_def = None
+
+                    try:
+                        sig_def = (
+                            message_def
+                            .get_signal_by_name(
+                                str(sig_name)
+                            )
+                        )
+                    except Exception:
+                        sig_def = None
+
+                    raw_value = 0
+
+                    if isinstance(
+                        sig_value,
+                        bool,
+                    ):
+                        raw_value = int(
+                            sig_value
+                        )
+
+                    elif isinstance(
+                        sig_value,
+                        (int, float),
+                    ):
+                        raw_value = int(
+                            sig_value
+                        )
+
+                    elif (
+                        sig_def is not None
+                        and getattr(
+                            sig_def,
+                            "choices",
+                            None,
+                        )
+                    ):
+                        for (
+                            choice_raw,
+                            choice_label,
+                        ) in sig_def.choices.items():
+                            if (
+                                str(choice_label)
+                                == str(sig_value)
+                            ):
+                                raw_value = int(
+                                    choice_raw
+                                )
+                                break
+
+                    sig = DecodedSignalLine(
+                        raw_value=raw_value,
+                        changed=bool(
+                            line.changed
+                        ),
+                    )
+
+                    sig._runtime_signal_name = str(
+                        sig_name
+                    )
+                    sig._sig_info = sig_def
+
+                    decoded_signals.append(
+                        sig
+                    )
+
+            line.signals = decoded_signals
+
+
+    """ NOTE: Page load version"""
+    @property
+    def entries(self) -> list[CANLogLine]:
+        if self._metadata is None:
+            return None
+        
+        if self._filter.empty():
+            view_browser = self._metadata.browse_all()
+        else:
+            view_browser = self._metadata.browse(self._filter.to_query())
+
+        db: CANDBInfo | None = None
+
+        if self.dbc_id is not None:
+            db = get_file_service().get_candb_data(
+                self.dbc_id
+            )
 
         lines: list[CANLogLine] = []
-        for row in rows:
-            LOG.debug("Row num: %s", row.line_number)
+
+        start = self.pageNum * self.pageSize
+        end = min(
+            (self.pageNum + 1) * self.pageSize,
+            view_browser.size(),
+        )
+
+        LOG.debug(
+            "entries window page=%s size=%s browser_size=%s start=%s end=%s",
+            self.pageNum,
+            self.pageSize,
+            view_browser.size(),
+            start,
+            end,
+        )
+
+        for i in range(start, end):
+            row = view_browser.at(i)
+
             line = CANLogLine(
                 channel=str(row.channel),
                 can_id=int(row.can_id),
@@ -567,57 +719,130 @@ class LogViewModel(QObject, ParseModel, DBCModel):
                 changed=bool(row.changed),
                 line_number=int(row.line_number),
                 timestamp=float(row.timestamp),
-                last_timestamp=float(row.last_timestamp),
+                last_timestamp=float(
+                    row.last_timestamp
+                ),
             )
 
-            # Build decoded signals only when DBC is loaded.
             if db is not None:
                 try:
-                    result = db.decode_message(line.can_id, line.data)
-                    message_def = db.get_message_by_frame_id(line.can_id)
-                    LOG.debug("Decoded: %s", result)
-                    LOG.debug("Message def: %s", message_def)
+                    result = db.decode_message(
+                        line.can_id,
+                        line.data,
+                    )
+                    message_def = (
+                        db.get_message_by_frame_id(
+                            line.can_id
+                        )
+                    )
 
-                    decoded_signals: list[DecodedSignalLine] = []
-                    if isinstance(result, dict) and message_def is not None:
+                    decoded_signals: list[
+                        DecodedSignalLine
+                    ] = []
+
+                    if (
+                        isinstance(result, dict)
+                        and message_def is not None
+                    ):
                         for sig_name, sig_value in result.items():
                             sig_def = None
+
                             try:
-                                sig_def = message_def.get_signal_by_name(str(sig_name))
+                                sig_def = (
+                                    message_def
+                                    .get_signal_by_name(
+                                        str(sig_name)
+                                    )
+                                )
                             except Exception:
                                 sig_def = None
 
-                            LOG.debug("Sig def: %s", sig_def)
-
                             raw_value = 0
-                            if isinstance(sig_value, bool):
-                                raw_value = int(sig_value)
-                            elif isinstance(sig_value, (int, float)):
-                                raw_value = int(sig_value)
-                            elif sig_def is not None and getattr(sig_def, "choices", None):
-                                matched = False
-                                for choice_raw, choice_label in sig_def.choices.items():
-                                    if str(choice_label) == str(sig_value):
-                                        raw_value = int(choice_raw)
-                                        matched = True
+
+                            if isinstance(
+                                sig_value,
+                                bool,
+                            ):
+                                raw_value = int(
+                                    sig_value
+                                )
+
+                            elif isinstance(
+                                sig_value,
+                                (int, float),
+                            ):
+                                raw_value = int(
+                                    sig_value
+                                )
+
+                            elif (
+                                sig_def is not None
+                                and getattr(
+                                    sig_def,
+                                    "choices",
+                                    None,
+                                )
+                            ):
+                                for (
+                                    choice_raw,
+                                    choice_label,
+                                ) in sig_def.choices.items():
+                                    if (
+                                        str(choice_label)
+                                        == str(sig_value)
+                                    ):
+                                        raw_value = int(
+                                            choice_raw
+                                        )
                                         break
-                                if not matched:
-                                    raw_value = 0
 
                             sig = DecodedSignalLine(
                                 raw_value=raw_value,
-                                changed=bool(line.changed),
+                                changed=bool(
+                                    line.changed
+                                ),
                             )
-                            sig._runtime_signal_name = str(sig_name)
+
+                            sig._runtime_signal_name = str(
+                                sig_name
+                            )
                             sig._sig_info = sig_def
-                            decoded_signals.append(sig)
+
+                            decoded_signals.append(
+                                sig
+                            )
 
                     line.signals = decoded_signals
-                except Exception as e:
-                    LOG.exception("Decode failed: %s", e)
 
-            pending = self._editing_line.get(int(line.line_number))
-            lines.append(deepcopy(pending) if pending is not None else line)
-            
+                except Exception as e:
+                    LOG.exception(
+                        "Decode failed: %s",
+                        e,
+                    )
+
+            pending = self.editingLine.get(
+                int(line.line_number)
+            )
+
+            lines.append(
+                deepcopy(pending)
+                if pending is not None
+                else line
+            )
+
+            # LOG.debug("Row num: %s", row.line_number)
 
         return lines
+
+    """ NOTE: This is not good view data for rows because it did not cover the filter state count"""
+    @property
+    def totalLines(self) -> int:
+        if self._metadata is None:
+            return 0
+        
+        if self._filter.empty():
+            view_browser = self._metadata.browse_all()
+        else:
+            view_browser = self._metadata.browse(self._filter.to_query())
+
+        return view_browser.size()

@@ -1,409 +1,399 @@
-from typing import Optional, List
+from typing import Any
 
-from PySide6.QtCore import QModelIndex, Qt, QItemSelectionModel, QPoint
-from PySide6.QtWidgets import QTreeView, QScrollBar, QHBoxLayout
-
-from can_sdk.data_object import CANLogLine
-from can_sdk.dbc_manager import CANDBManager
-from lw.logger_setup import setup_logger, LOG
-from ui_sdk.components.pyqt.TreeLogMessageSignals import (
-    TreeLogMessageSignals,
-    TreeLogMessageSignalsModel,
-    TreeLogSelectionSignalsModel,
-    _Node,
-    Type,
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QModelIndex,
+    Qt,
 )
-from ui_sdk.components.pyqt.TreeLogDiskView import TreeLogDiskModel, SourceProvider
+from PySide6.QtGui import QColor
 
-""" Lazy load on RAM and Disk"""
-class TreeLogLazyLoadModel(TreeLogMessageSignalsModel, TreeLogDiskModel):
-    """Lazy loading model layered on top of TreeLogMessageSignalsModel."""
-    NODE_TYPE = _Node
-    CHUNK_SIZE = 100
+from canapp.data_object import (
+    CANLogLine,
+    DecodedSignalLine,
+)
+from canapp.vm.log_viewmodel import (
+    CANLogLine,
+    DecodedSignalLine,
+    LogViewModel,
+)
+
+class TreeLogLazyLoad(QAbstractItemModel):
+    COL_TREND = 0
+    COL_LOG_MESSAGES = 1
+
+    COLUMN_COUNT = 2
+
+    TAG_FG = {
+        "normal": QColor("#FFFFFF"),
+        "change": QColor("#FFFFFF"),
+    }
+
     def __init__(
         self,
+        view_model: LogViewModel,
         parent=None,
-        model: CANDBManager = None,
-        **_,
     ):
-        super().__init__(parent=parent, model=model)
-        self._loaded_rows = 0
+        super().__init__(parent)
 
-    def _total_rows(self) -> int:
-        if getattr(self, "_source_provider", None) is None:
-            return len(self._data)
-        return TreeLogDiskModel._total_rows(self)
+        self._vm = view_model
+        # self._fetched_count = 0
 
-    def _build_message_node(self, row: int, entry: CANLogLine) -> _Node:
-        node = super()._build_message_node(row, entry)
-        node.type = Type.MESSAGE
-        return node
+        self._vm.stateChanged.connect(
+            self._reevaluate
+        )
 
-    def set_data(self, data: List[CANLogLine], preload_first_window: bool = True):
+        self._reevaluate()
+
+    def _reevaluate(self) -> None:
         self.beginResetModel()
-        self._loaded_rows = 0
-        src = data if data is not None else []
-        self._data = [entry for entry in src if entry is not None]
-        self._root.children.clear()
-        self._message_nodes.clear()
-        for row, entry in enumerate(self._data):
-            self._message_nodes[row] = self._build_message_node(row, entry)
+        # self._fetched_count = 0
         self.endResetModel()
-        if preload_first_window and self._total_rows() > 0:
-            self.fetchMore(QModelIndex())
 
-    def _append_source_rows(self, rows: List[CANLogLine]):
-        for entry in rows:
-            if entry is None:
-                continue
-            idx = len(self._data)
-            self._data.append(entry)
-            self._message_nodes[idx] = self._build_message_node(idx, entry)
+    def columnCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        return self.COLUMN_COUNT
 
-    def canFetchMore(self, parent=QModelIndex()):
+    def rowCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        if not parent.isValid():
+            return self._vm.lazyCount
+
+        if parent.column() != 0:
+            return 0
+
+        line = parent.internalPointer()
+
+        if isinstance(line, CANLogLine):
+            return len(line.signals)
+
+        return 0
+
+    def canFetchMore(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> bool:
         if parent.isValid():
             return False
 
-        if self._source_provider is None:
-            return self._loaded_rows < self._total_rows()
-
-        if self._loaded_rows < len(self._data):
-            return True
-
-        if self._source_total_rows is not None and self._loaded_rows >= int(self._source_total_rows):
-            return False
-
-        return not self._source_exhausted
-
-    def rowCount(self, parent=QModelIndex()):
-        if parent.isValid():
-            return super().rowCount(parent)
-        return self._loaded_rows
-
-    def hasChildren(self, parent=QModelIndex()):
-        if not parent.isValid():
-            return self._loaded_rows > 0
-        return bool(super().hasChildren(parent))
-
-    def index(self, row, column, parent=QModelIndex()):
-        if not parent.isValid():
-            total = self._loaded_rows
-            if row < 0 or row >= total or column < 0 or column >= self._columns:
-                return QModelIndex()
-            node = self._message_nodes.get(row)
-            if node is None:
-                return QModelIndex()
-            node.parent = self._root
-            return self.createIndex(row, column, node)
-        return super().index(row, column, parent)
-
-    def data(self, index, role=Qt.DisplayRole):
-        return super().data(index, role)
-
-    def fetchMore(self, parent=QModelIndex()):
-        if parent.isValid():
-            return
-        start_row = self._loaded_rows
-        loaded_start = int(getattr(self, "_loaded_start", 0))
-        abs_start_row = loaded_start + start_row
-        chunk_size = self.CHUNK_SIZE
-        LOG.debug(
-            f"fetchMore start_row={start_row}, abs_start_row={abs_start_row}, "
-            f"loaded_start={loaded_start}, chunk_size={chunk_size}"
+        return (
+            self._vm.lazyCount
+            < self._vm.totalLines
         )
-        if self._source_provider is not None:
-            if self._loaded_rows >= len(self._data) and not self._source_exhausted:
-                start = loaded_start + len(self._data)
-                rows = self._source_provider.load_visible(start, chunk_size) or []
-                valid_rows = [row for row in rows if row is not None]
-                if not valid_rows:
-                    self._source_exhausted = True
-                else:
-                    self._append_source_rows(valid_rows)
-                    if len(valid_rows) < chunk_size:
-                        self._source_exhausted = True
 
-        total_available = len(self._data)
-        remaining = total_available - self._loaded_rows
-        if remaining <= 0:
-            LOG.debug(
-                f"fetchMore skipped start_row={start_row}, abs_start_row={abs_start_row}, "
-                f"loaded_start={loaded_start}, chunk_size={chunk_size}, "
-                f"reason=remaining<=0, total_available={total_available}, loaded_rows={self._loaded_rows}"
-            )
+    def fetchMore(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> None:
+        if parent.isValid():
             return
 
-        items_to_fetch = min(chunk_size, remaining)
-        first = self._loaded_rows
-        last = first + items_to_fetch - 1
-        abs_first = loaded_start + first
-        abs_last = loaded_start + last
-        self.beginInsertRows(QModelIndex(), first, last)
-        self._loaded_rows += items_to_fetch
+        if not self.canFetchMore(parent):
+            return
+
+        row = self._vm.lazyCount
+
+        self.beginInsertRows(
+            QModelIndex(),
+            row,
+            row,
+        )
+
+        self._vm.lazyCount += 1
+
         self.endInsertRows()
-        LOG.debug(
-            f"fetchMore loaded start_row={first}, end_row={last}, "
-            f"abs_start_row={abs_first}, abs_end_row={abs_last}, "
-            f"loaded_start={loaded_start}, chunk_size={items_to_fetch}, "
-            f"loaded_rows={self._loaded_rows}, total_available={total_available}"
-        )
-        #self._load_until_row(self._loaded_rows - 1)
 
-    def _load_until_row(self, row: int):
-        LOG.debug("_load_until_row")
-        total = self._total_rows()
-        if total <= 0 or self._loaded_rows <= 0:
-            return
-
-        target_loaded = min(total, max(0, int(row) + 1))
-        if target_loaded <= 0:
-            return
-
-        first_row = 0
-        count = target_loaded - first_row
-        lines = self._data[first_row:first_row + count]
-        loaded_count = min(len(lines), count)
-        if loaded_count <= 0:
-            return
-
-        for i, entry in enumerate(lines[:loaded_count]):
-            idx = first_row + i
-            if idx >= total:
-                break
-            node = self._message_nodes.get(idx)
-            if node is None:
-                continue
-            if node.payload is None:
-                node.payload = entry
-            if not node.signals_loaded:
-                """self._calculate_message(node)"""
-
-        top_left = self.index(0, 0, QModelIndex())
-        bottom_right = self.index(self._loaded_rows - 1, self._columns - 1, QModelIndex())
-        if top_left.isValid() and bottom_right.isValid():
-            self.dataChanged.emit(
-                top_left,
-                bottom_right,
-                [Qt.DisplayRole, Qt.EditRole, Qt.ForegroundRole, Qt.BackgroundRole],
+    def hasChildren(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> bool:
+        if not parent.isValid():
+            return (
+                self._fetched_count > 0
+                or self.canFetchMore(parent)
             )
 
-    def ensure_message_row_loaded(self, row: int, extra_after: int = 0):
-        total = self._total_rows()
-        if row < 0 or row >= total:
+        if parent.column() != 0:
             return False
-        target = min(total - 1, row + extra_after)
-        while self._loaded_rows <= target and self.canFetchMore():
-            self.fetchMore()
-        # if self._loaded_rows > 0:
-        #     self._load_until_row(min(target, self._loaded_rows - 1))
-        return True
 
-class TreeLogLazyLoad(TreeLogMessageSignals):
+        line = parent.internalPointer()
 
-    def __init__(self, parent=None, model: CANDBManager = None, **kwargs):
-        super().__init__(parent=parent, model=model)
+        if isinstance(line, CANLogLine):
+            return bool(line.signals)
 
-        self.model_ = TreeLogLazyLoadModel(self, model=model, **kwargs)
-        self.view.setModel(self.model_)
+        return False
 
-        self.select_model = TreeLogSelectionSignalsModel(self.model_, self.view)
-        self.view.setSelectionModel(self.select_model)
+    """ NOTE: We dont let the Qt to manage the row state itself, we must store it on our ViewModel"""
+    def index(
+        self,
+        row: int,
+        column: int,
+        parent: QModelIndex = QModelIndex(),
+    ) -> QModelIndex:
+        if not self.hasIndex(
+            row,
+            column,
+            parent,
+        ):
+            return QModelIndex()
 
-        self._scroll_guard = 0
-        self._current_focus_message_row: Optional[int] = None
+        if not parent.isValid():
+            self._vm.row = row
+            line = self._vm.entry
 
-        # hide Qt scrollbar and create virtual scrollbar
-        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._fast_scroll = False
-        self._virtual_bar = QScrollBar(Qt.Vertical, self)
-        self._virtual_bar.valueChanged.connect(self._on_virtual_scroll)
-        self._virtual_bar.sliderPressed.connect(self._on_scroll_start)
-        self.view.verticalScrollBar().valueChanged.connect(self._on_view_scrolled)
-        #self._virtual_bar.sliderReleased.connect(self._on_scroll_end)
+            if line is None:
+                return QModelIndex()
 
-        # re-layout
-        main_layout = self.layout()
-        main_layout.removeWidget(self.view)
+            return self.createIndex(
+                row,
+                column,
+                line,
+            )
 
-        h_layout = QHBoxLayout()
-        h_layout.setContentsMargins(0, 0, 0, 0)
-        h_layout.setSpacing(0)
+        parent_line = parent.internalPointer()
 
-        h_layout.addWidget(self.view)
-        h_layout.addWidget(self._virtual_bar)
+        if not isinstance(
+            parent_line,
+            CANLogLine,
+        ):
+            return QModelIndex()
 
-        main_layout.addLayout(h_layout)
+        if not 0 <= row < len(
+            parent_line.signals
+        ):
+            return QModelIndex()
 
-    def _on_scroll_start(self):
-        self.model_._fast_scroll = True
+        signal = parent_line.signals[row]
 
-    def _on_scroll_end(self):
-        self.model_._fast_scroll = False
-        value = self._virtual_bar.value()
-        target_row = min(value, self.model_._total_rows() - 1)
-        visible_rows = self._visible_rows()
-        # ensure rows are loaded
-        self.model_.ensure_message_row_loaded(
-            target_row,
-            extra_after=visible_rows
+        return self.createIndex(
+            row,
+            column,
+            signal,
         )
 
-    def _sync_virtual_scrollbar(self):
-        total = self.model_._total_rows()
-
-        if total <= 0:
-            self._virtual_bar.setRange(0, 0)
-            return
-
-        visible_rows = self._visible_rows()
-        max_top_row = max(0, total - visible_rows)
-        self._virtual_bar.setRange(0, max_top_row)
-        self._virtual_bar.setPageStep(visible_rows)
-
-    def _visible_rows(self):
-        idx = self.model_.index(0, 0, QModelIndex())
-
-        row_h = self.view.rowHeight(idx)
-        if row_h <= 0:
-            row_h = max(1, self.view.fontMetrics().height() + 6)
-
-        return max(1, self.view.viewport().height() // row_h)
-
-    def _on_virtual_scroll(self, value: int):
-        if self._scroll_guard:
-            return
-
-        self._scroll_guard += 1
-
-        try:
-            total = self.model_._total_rows()
-            if total <= 0:
-                return
-            visible_rows = self._visible_rows()
-            max_top_row = max(0, total - visible_rows)
-            target_row = min(max(0, value), max_top_row)
-
-            # prefetch margin prevents jumps
-            preload_margin = visible_rows * 2
-
-            self.model_.ensure_message_row_loaded(
-                target_row,
-                extra_after=preload_margin
-            )
-            idx = self.model_.index(target_row, 0, QModelIndex())
-            if idx.isValid():
-                self.view.scrollTo(idx, QTreeView.PositionAtTop)
-
-        finally:
-            self._scroll_guard -= 1
-
-    def _on_view_scrolled(self, _value: int):
-        """Sync manual/wheel scrolling in the view back to the virtual bar."""
-        if self._scroll_guard:
-            return
-        if self.model_._total_rows() <= 0:
-            return
-
-        top_idx = self.view.indexAt(QPoint(0, 0))
-        if not top_idx.isValid():
-            return
-
-        node = top_idx.internalPointer()
-        if isinstance(node, _Node) and node.type == Type.SIGNAL and top_idx.parent().isValid():
-            top_row = top_idx.parent().row()
-        else:
-            top_row = top_idx.row()
-
-        if top_row < 0:
-            return
-
-        visible_rows = self._visible_rows()
-        max_top_row = max(0, self.model_._total_rows() - visible_rows)
-        clamped_row = min(top_row, max_top_row)
-
-        if self._virtual_bar.value() != clamped_row:
-            self._virtual_bar.setValue(clamped_row)
-
-    def set_data(self, data):
-
-        self.model_.set_data(data)
-
-        self._sync_virtual_scrollbar()
-
-        self._virtual_bar.setValue(0)
-
-        if self.model_._total_rows() > 0:
-            self._on_virtual_scroll(0)
-
-    def focus_message_row(self, row: int) -> bool:
-        row_h = self.view.rowHeight(self.model_.index(0, 0, QModelIndex()))
-        if row_h <= 0:
-            row_h = max(1, self.view.fontMetrics().height() + 6)
-
-        visible_rows = max(1, self.view.viewport().height() // row_h)
-        preload_after = max(visible_rows // 2, 10)
-
-        if not self.model_.ensure_message_row_loaded(row, extra_after=preload_after):
-            return False
-
-        index = self.model_.index(row, 1, QModelIndex())
+    def parent(
+        self,
+        index: QModelIndex,
+    ) -> QModelIndex:
         if not index.isValid():
-            return False
+            return QModelIndex()
 
-        self.select_model.setCurrentIndex(
-            index,
-            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+        obj = index.internalPointer()
+
+        if isinstance(obj, CANLogLine):
+            return QModelIndex()
+
+        if not isinstance(
+            obj,
+            DecodedSignalLine,
+        ):
+            return QModelIndex()
+
+        parent_line = obj.parent
+
+        if parent_line is None:
+            return QModelIndex()
+
+        logical_row = getattr(
+            parent_line,
+            "_logical_row",
+            None,
         )
-        hbar = self.view.horizontalScrollBar()
-        h_value = hbar.value()
-        self.view.scrollTo(index, QTreeView.PositionAtCenter)
-        hbar.setValue(h_value)
-        self.view.setFocus()
-        self._current_focus_message_row = row
-        return True
 
-    def get_current_focus_message_row(self) -> Optional[int]:
-        return self._current_focus_message_row
+        if logical_row is None:
+            return QModelIndex()
 
+        return self.createIndex(
+            logical_row,
+            0,
+            parent_line,
+        )
 
-if __name__ == "__main__":
-    import sys
-    import time
-    from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton
-    from can_sdk.test_ultility import TEST_generated_CANLogLine_batch, TEST_set_up_DBModel
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if not index.isValid():
+            return None
 
-    setup_logger(env="DEV", backup_count=30)
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+        obj = index.internalPointer()
 
-    db_model = TEST_set_up_DBModel()
-    parsed_lines = TEST_generated_CANLogLine_batch(10000)
+        if isinstance(obj, CANLogLine):
+            return self._line_data(
+                index,
+                obj,
+                role,
+            )
 
-    win = QWidget()
-    win.setWindowTitle("TreeLogLazyLoad Test")
-    layout = QVBoxLayout(win)
+        if isinstance(
+            obj,
+            DecodedSignalLine,
+        ):
+            return self._signal_data(
+                index,
+                obj,
+                role,
+            )
 
-    tree = TreeLogLazyLoad(model=db_model)
-    layout.addWidget(tree)
+        return None
 
-    load_btn = QPushButton("Load Parsed Lines")
+    def _line_data(
+        self,
+        index: QModelIndex,
+        line: CANLogLine,
+        role: int,
+    ) -> Any:
+        if (
+            role
+            == Qt.ItemDataRole.ForegroundRole
+        ):
+            return self.TAG_FG[
+                "change"
+                if line.changed
+                else "normal"
+            ]
 
-    def on_load_click():
-        start = time.perf_counter()
-        tree.set_data(parsed_lines)
-        t1 = time.perf_counter()
-        app.processEvents()
-        t2 = time.perf_counter()
-        print(f"set_data: {t1 - start:.4f}s | render: {t2 - t1:.4f}s | total: {t2 - start:.4f}s")
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return None
 
-    load_btn.clicked.connect(on_load_click)
-    layout.addWidget(load_btn)
+        column = index.column()
 
-    fetch_btn = QPushButton("Fetch More")
-    fetch_btn.clicked.connect(lambda: tree.model_.fetchMore(QModelIndex()))
-    layout.addWidget(fetch_btn)
+        if column == self.COL_TREND:
+            return (
+                "●"
+                if line.changed
+                else "○"
+            )
 
-    win.resize(900, 560)
-    win.show()
+        if (
+            column
+            == self.COL_LOG_MESSAGES
+        ):
+            return line.format_line_log()
 
-    sys.exit(app.exec())
+        return None
+
+    def _signal_data(
+        self,
+        index: QModelIndex,
+        signal: DecodedSignalLine,
+        role: int,
+    ) -> Any:
+        if (
+            role
+            == Qt.ItemDataRole.ForegroundRole
+        ):
+            return self.TAG_FG[
+                "change"
+                if signal.changed
+                else "normal"
+            ]
+
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return None
+
+        column = index.column()
+
+        if column == self.COL_TREND:
+            return (
+                "●"
+                if signal.changed
+                else ""
+            )
+
+        if (
+            column
+            != self.COL_LOG_MESSAGES
+        ):
+            return None
+
+        signal_name = str(
+            getattr(
+                signal,
+                "_runtime_signal_name",
+                "",
+            )
+            or ""
+        )
+
+        sig_info = getattr(
+            signal,
+            "_sig_info",
+            None,
+        )
+
+        unit = ""
+
+        if sig_info is not None:
+            unit = str(
+                getattr(
+                    sig_info,
+                    "unit",
+                    "",
+                )
+                or ""
+            )
+
+        text = (
+            f"{signal_name}: "
+            f"{signal.raw_value}"
+        )
+
+        if unit:
+            text += f" {unit}"
+
+        return text
+
+    def flags(
+        self,
+        index: QModelIndex,
+    ) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+
+        return (
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+        )
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return None
+
+        if (
+            orientation
+            != Qt.Orientation.Horizontal
+        ):
+            return None
+
+        headers = (
+            "",
+            "Log Messages",
+        )
+
+        if not (
+            0
+            <= section
+            < len(headers)
+        ):
+            return None
+
+        return headers[section]
