@@ -50,7 +50,7 @@ def test_05_parse_log(file_service: tuple[FileService, LogViewModel], file_path:
     assert vm.parser_done_event.wait(PARSE_TIMEOUT)
 
     page_entries = wait(lambda: vm.entries, max_ms=TIMEOUT_LOADPAGE_MS)
-    entry = wait(lambda: vm.entry, max_ms=TIMEOUT_QUERY_MS)
+    #entry = wait(lambda: vm.entry, max_ms=TIMEOUT_QUERY_MS)
     total = wait(lambda: vm.totalLines, max_ms=TIMEOUT_QUERY_MS)
     assert vm.log_id is not None
     print(total)

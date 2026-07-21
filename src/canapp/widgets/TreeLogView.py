@@ -488,15 +488,14 @@ class TreeLogView(QWidget):
             self.view
         )
 
-        # self.scrollbar = QScrollBar(
-        #     Qt.Orientation.Vertical,
-        #     self,
-        # )
+        self.scrollbar = QScrollBar(
+            Qt.Orientation.Vertical,
+            self,
+        )
 
-
-        # layout.addWidget(
-        #     self.scrollbar
-        # )
+        layout.addWidget(
+            self.scrollbar
+        )
 
     #     self.scrollbar.valueChanged.connect(
     #         self._on_scroll
