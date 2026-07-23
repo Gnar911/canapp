@@ -6,42 +6,108 @@ from PySide6.QtCore import Property, Signal, Slot, QObject
 
 # from .base_view_model import BaseViewModel
 from cs_test.mock_vm import *
-from can_service.can_srv import CANDeviceInfo
-from can_service.srv_if import get_can_service_facade
-from canapp.data_object import DeviceInfoLine
+from cansrv.can_srv import CANDeviceInfo
+from cansrv.can_srv import get_can_service
+# from canapp.data_object import DeviceInfoLine
+from lw.srv_event import SrvEvent
+from PySide6.QtCore import (
+    Qt,
+    QModelIndex,
+    QAbstractListModel,
+)
 
+@dataclass(frozen=True)
+class DeviceInfoLine:
+    vendor_name: str
+    channel_name: str
+    channel_index: int
+
+    is_available: bool
+    is_acquired: bool
+    is_disconnected: bool
+
+class ListModel(QAbstractListModel):
+    ItemRole = Qt.UserRole + 1
+
+    def __init__(
+        self,
+        viewmodel: ChannelViewModel,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._items = viewmodel._available_devices
+
+    def rowCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        if parent.isValid():
+            return 0
+
+        return len(self._items)
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.DisplayRole,
+    ):
+        if not index.isValid():
+            return None
+
+        row = index.row()
+
+        if not 0 <= row < len(self._items):
+            return None
+
+        item = self._items[row]
+
+        if role == Qt.DisplayRole:
+            return item.show
+
+        if role == self.ItemRole:
+            return item
+
+        return None
+
+    def roleNames(self):
+        return {
+            self.ItemRole: b"item",
+        }
+    
 class ChannelViewModel(QObject, ScannerVM):
     deviceStateChanged = Signal()
 
     def __init__(self):
         super().__init__()
-        self._can_service = get_can_service_facade()
-        # self._available_devices: list[CANDeviceInfo] = []
-        # self._acquired_devices: list[CANDeviceInfo] = []
+        self._can_service = get_can_service()
+        self._available_devices: list[CANDeviceInfo] = []
+        self._cbx_model = ListModel(self)
+
+        self._acquired_devices: list[CANDeviceInfo] = []
 
     """ State Machine"""
-    @property
-    def available_devices(self):
-        return self._available_devices
-    @property
-    def acquired_devices(self):
-        return self._acquired_devices
+    # @property
+    # def available_devices(self):
+    #     return self._available_devices
+    # @property
+    # def acquired_devices(self):
+    #     return self._acquired_devices
     
-    @acquired_devices.setter
-    def acquired_devices(self, value):
-        if self._acquired_devices == value:
-            return
+    # @acquired_devices.setter
+    # def acquired_devices(self, value):
+    #     if self._acquired_devices == value:
+    #         return
 
-        self._acquired_devices = value
-        self.deviceStateChanged.emit()
+    #     self._acquired_devices = value
+    #     self.deviceStateChanged.emit()
 
-    @available_devices.setter
-    def available_devices(self, value):
-        if self._available_devices == value:
-            return
+    # @available_devices.setter
+    # def available_devices(self, value):
+    #     if self._available_devices == value:
+    #         return
 
-        self._available_devices = value
-        self.deviceStateChanged.emit()
+    #     self._available_devices = value
+    #     self.deviceStateChanged.emit()
     """"""
 
     def on_scan_status(self, payload: SrvEvent) -> None:
@@ -77,24 +143,17 @@ class ChannelViewModel(QObject, ScannerVM):
             self.available_devices.append(device)
             return
             
-    @Slot(int, result=bool)
-    def acquireDevice(self, selected_index: int) -> bool:
+    @Slot(object, result=bool)
+    def acquireDevice(
+        self,
+        device: CANDeviceInfo,
+    ) -> bool:
+        return bool(
+            self._can_service.acquire(device)
+        )
 
-        if not (0 <= selected_index < len(self._available_devices)):
-            return False
-
-        device = self._available_devices[selected_index]
-
-        return bool(self._can_service.acquire(device))
-
-    @Slot(int)
-    def releaseDevice(self, selected_index: int) -> None:
-
-        if not (0 <= selected_index < len(self._acquired_devices)):
-            return
-
-        device = self._acquired_devices[selected_index]
-
+    @Slot(object)
+    def releaseDevice(self, device: CANDeviceInfo) -> None:
         self._can_service.release(device)
 
     """ Vendor list box"""

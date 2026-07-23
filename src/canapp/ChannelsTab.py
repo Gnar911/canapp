@@ -1,50 +1,40 @@
 from PySide6 import QtWidgets, QtCore
-from can_sdk.connection_viewmodel import (
-    CANConnectManager,
-    CANChannelInfo,
-    ChannelState,
-)
-from can_sdk.test_ultility import (
-    TEST_set_up_all_channels,
-    TEST_down_all_channels,
-    TEST_get_channel_status,
+from canapp.vm.channel_view_model import (
+    ChannelViewModel,
+    ListModel,
+    DeviceInfoLine
 )
 
-STATE_COLOR = {
-    ChannelState.ACQUIRED: "green",
-    ChannelState.AVAILABLE: "orange",
-    ChannelState.UNPLUGGED: "red",
-}
-
+# STATE_COLOR = {
+#     ChannelState.ACQUIRED: "green",
+#     ChannelState.AVAILABLE: "orange",
+#     ChannelState.UNPLUGGED: "red",
+# }
 
 class ChannelsTab(QtWidgets.QWidget):
-    channelLocked = QtCore.Signal(object)
-    _channelsStateRefreshRequested = QtCore.Signal()
-
-    def __init__(self, model: CANConnectManager, parent = None):
+    def __init__(self, vm: ChannelViewModel, parent = None):
         super().__init__(parent)
 
-        self.model = model
-        self._channelsStateRefreshRequested.connect(self.on_event_channels_scan, QtCore.Qt.QueuedConnection)
-        self._subscribe_model_events()
+        self.vm = vm
+        self.vm.deviceStateChanged.connect(self.reevaluate)
 
-        self._channel_rows: dict[str, QtWidgets.QWidget] = {}
+        # self._channel_rows: dict[str, QtWidgets.QWidget] = {}
 
         self._build_ui()
-        self.on_event_channels_scan()
+        #self.on_event_channels_scan()
 
-    def _subscribe_model_events(self):
-        event = getattr(self.model, "event_on_channels_state_changed", None)
-        if event is not None:
-            event.subscribe(self._on_model_channels_state_changed)
-            return
+    # def _subscribe_vm_events(self):
+    #     event = getattr(self.vm, "event_on_channels_state_changed", None)
+    #     if event is not None:
+    #         event.subscribe(self._on_vm_channels_state_changed)
+    #         return
 
-        fallback_event = getattr(self.model, "event_on_channels_scan", None)
-        if fallback_event is not None:
-            fallback_event.subscribe(self._on_model_channels_state_changed)
+    #     fallback_event = getattr(self.vm, "event_on_channels_scan", None)
+    #     if fallback_event is not None:
+    #         fallback_event.subscribe(self._on_vm_channels_state_changed)
 
-    def _on_model_channels_state_changed(self, *_):
-        self._channelsStateRefreshRequested.emit()
+    # def _on_vm_channels_state_changed(self, *_):
+    #     self._channelsStateRefreshRequested.emit()
 
     # ------------------------------------------------------------------
     # UI
@@ -65,10 +55,15 @@ class ChannelsTab(QtWidgets.QWidget):
 
         self.combo = QtWidgets.QComboBox()
         self.combo.setMinimumWidth(200)
+        self.combo.setModel(self.vm._cbx_model)
         select_row.addWidget(self.combo)
 
         lock_btn = QtWidgets.QPushButton("Lock Channel")
-        lock_btn.clicked.connect(self.on_lock_channel)
+        lock_btn.clicked.connect(
+            lambda: self.vm.acquireDevice(
+                self.combo.currentData(ListModel.ItemRole)
+            )
+        )
         select_row.addWidget(lock_btn)
 
         select_row.addStretch(1)
@@ -96,7 +91,10 @@ class ChannelsTab(QtWidgets.QWidget):
         status_layout = QtWidgets.QVBoxLayout(self.status_section)
         status_layout.setAlignment(QtCore.Qt.AlignTop)
 
-        status_layout.addWidget(self._hline())
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.HLine)
+        line.setFrameShadow(QtWidgets.QFrame.Sunken)
+        status_layout.addWidget(line)
 
         status_title = QtWidgets.QLabel("Channel Status")
         status_title.setStyleSheet("font-weight: bold;")
@@ -135,153 +133,108 @@ class ChannelsTab(QtWidgets.QWidget):
         # start hidden
         self.status_section.hide()
 
-    def _hline(self):
-        line = QtWidgets.QFrame()
-        line.setFrameShape(QtWidgets.QFrame.HLine)
-        line.setFrameShadow(QtWidgets.QFrame.Sunken)
-        return line
+    # def _hline(self):
+    #     line = QtWidgets.QFrame()
+    #     line.setFrameShape(QtWidgets.QFrame.HLine)
+    #     line.setFrameShadow(QtWidgets.QFrame.Sunken)
+    #     return line
 
-    # ------------------------------------------------------------------
-    # Backend events
-    # ------------------------------------------------------------------
-    def on_event_channels_scan(self):
-        self._sync_available_combo()
+    # def _sync_available_combo(self):
+    #     current_handle = self.combo.currentData()
+    #     current_text = self.combo.currentText()
 
-        self._refresh_channel_status()
+    #     available_items = list(self.vm.available_channels.items())
+    #     available_handles = [handle for handle, _ in available_items]
 
-    def _sync_available_combo(self):
-        current_handle = self.combo.currentData()
-        current_text = self.combo.currentText()
+    #     blocker = QtCore.QSignalBlocker(self.combo)
+    #     try:
+    #         existing_index_by_handle = {
+    #             self.combo.itemData(i): i
+    #             for i in range(self.combo.count())
+    #         }
 
-        available_items = list(self.model.available_channels.items())
-        available_handles = [handle for handle, _ in available_items]
+    #         for handle, ch in available_items:
+    #             idx = existing_index_by_handle.get(handle)
+    #             if idx is None:
+    #                 self.combo.addItem(ch.name, handle)
+    #             elif self.combo.itemText(idx) != ch.name:
+    #                 self.combo.setItemText(idx, ch.name)
 
-        blocker = QtCore.QSignalBlocker(self.combo)
-        try:
-            existing_index_by_handle = {
-                self.combo.itemData(i): i
-                for i in range(self.combo.count())
-            }
+    #         remove_indices = [
+    #             i for i in range(self.combo.count())
+    #             if self.combo.itemData(i) not in available_handles
+    #         ]
+    #         for idx in reversed(remove_indices):
+    #             self.combo.removeItem(idx)
 
-            for handle, ch in available_items:
-                idx = existing_index_by_handle.get(handle)
-                if idx is None:
-                    self.combo.addItem(ch.name, handle)
-                elif self.combo.itemText(idx) != ch.name:
-                    self.combo.setItemText(idx, ch.name)
+    #         if current_handle in available_handles:
+    #             for i in range(self.combo.count()):
+    #                 if self.combo.itemData(i) == current_handle:
+    #                     self.combo.setCurrentIndex(i)
+    #                     break
+    #         elif self.combo.count() > 0:
+    #             match_index = self.combo.findText(current_text)
+    #             if match_index >= 0:
+    #                 self.combo.setCurrentIndex(match_index)
+    #     finally:
+    #         del blocker
 
-            remove_indices = [
-                i for i in range(self.combo.count())
-                if self.combo.itemData(i) not in available_handles
-            ]
-            for idx in reversed(remove_indices):
-                self.combo.removeItem(idx)
+    # def _refresh_channel_status(self):
+    #     # clear rows
+    #     while self.rows_container.count():
+    #         item = self.rows_container.takeAt(0)
+    #         if item.widget():
+    #             item.widget().deleteLater()
 
-            if current_handle in available_handles:
-                for i in range(self.combo.count()):
-                    if self.combo.itemData(i) == current_handle:
-                        self.combo.setCurrentIndex(i)
-                        break
-            elif self.combo.count() > 0:
-                match_index = self.combo.findText(current_text)
-                if match_index >= 0:
-                    self.combo.setCurrentIndex(match_index)
-        finally:
-            del blocker
+    #     self._channel_rows.clear()
 
-    def _refresh_channel_status(self):
-        # clear rows
+    #     for ch in self.vm.all_channels.values():
+    #         self._add_channel_row(ch)
+
+    #     self.active_label.setText(str(len(self.vm.acquired_channels)))
+    #     self.disconnected_label.setText(str(len(self.vm.available_channels)))
+    #     self.unplugged_label.setText(str(len(self.vm.disconnected_channels)))
+
+    #     # toggle empty/status
+    #     if self.vm.all_channels:
+    #         self.empty_state.hide()
+    #         self.status_section.show()
+    #     else:
+    #         self.status_section.hide()
+    #         self.empty_state.show()
+
+    def reevaluate(self):
+        self._clear_channel_rows()
+        for line in self.vm.all_device_status:
+            self._add_channel_row(line)
+
+    def _clear_channel_rows(self):
         while self.rows_container.count():
             item = self.rows_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
 
-        self._channel_rows.clear()
+            if widget := item.widget():
+                widget.deleteLater()
 
-        for ch in self.model.all_channels.values():
-            self._add_channel_row(ch)
-
-        self.active_label.setText(str(len(self.model.acquired_channels)))
-        self.disconnected_label.setText(str(len(self.model.available_channels)))
-        self.unplugged_label.setText(str(len(self.model.disconnected_channels)))
-
-        # toggle empty/status
-        if self.model.all_channels:
-            self.empty_state.hide()
-            self.status_section.show()
-        else:
-            self.status_section.hide()
-            self.empty_state.show()
-
-    def _add_channel_row(self, ch: CANChannelInfo):
+    def _add_channel_row(
+        self,
+        line: DeviceInfoLine,
+    ):
         row = QtWidgets.QWidget()
+
         layout = QtWidgets.QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        vendor = getattr(getattr(ch.config, "vendor", None), "name", "Unknown")
-
         label = QtWidgets.QLabel(
-            f"{vendor}  Channel {ch.name}:"
+            line.device.show
         )
-        label.setMinimumWidth(300)
+
+        status = QtWidgets.QLabel(
+            line.status
+        )
+
         layout.addWidget(label)
-
-        status = QtWidgets.QLabel(ch.state.name.capitalize())
-        color = STATE_COLOR.get(ch.state, "gray")
-        status.setStyleSheet(f"color: {color};")
-
         layout.addWidget(status)
-        layout.addStretch(1)
+        layout.addStretch()
 
         self.rows_container.addWidget(row)
-        self._channel_rows[ch.name] = row
 
-    # ------------------------------------------------------------------
-    # UI actions
-    # ------------------------------------------------------------------
-    def on_lock_channel(self):
-        handle = self.combo.currentData()
-        if handle is None:
-            return
-
-        if self.model.acquire(handle):
-            self.channelLocked.emit(handle)
-
-
-if __name__ == "__main__":
-    app = QtWidgets.QApplication([])
-
-    try:
-        TEST_set_up_all_channels()
-        print(TEST_get_channel_status())
-    except Exception as exc:
-        QtWidgets.QMessageBox.warning(
-            None,
-            "VCAN Setup",
-            f"Failed to setup vcan interfaces:\n{exc}",
-        )
-
-    model = CANConnectManager()
-    model.start_scan()
-
-    w = ChannelsTab(model=model)
-    w.resize(700, 420)
-    w.setWindowTitle("ChannelsTab Multi-Channel Test")
-    w.show()
-
-    refresh_timer = QtCore.QTimer(w)
-    refresh_timer.setInterval(500)
-    refresh_timer.timeout.connect(w.on_event_channels_scan)
-    refresh_timer.start()
-
-    def _cleanup():
-        try:
-            model.shutdown()
-        finally:
-            try:
-                TEST_down_all_channels()
-            except Exception as exc:
-                print(f"VCAN teardown warning: {exc}")
-
-    app.aboutToQuit.connect(_cleanup)
-    app.exec()

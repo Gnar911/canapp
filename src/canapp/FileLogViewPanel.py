@@ -1,11 +1,11 @@
 #from can_sdk.dbc_manager import CANDBManager
 # from can_sdk.logfile_manager import LogContextManager, State, LogContext
 # from can_sdk.parser import CANLogManager
-from lw.logger_setup import LOG, setup_logger
-import os
-from typing import Optional, List
+# from lw.logger_setup import LOG, setup_logger
+# import os
+# from typing import Optional, List
 from PySide6.QtWidgets import (
-    QWidget, QGroupBox, QVBoxLayout, QHBoxLayout,
+    QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QTreeView,
     QLineEdit, QComboBox, QMessageBox, QLabel, QProgressBar, QStackedLayout, QPushButton, QSizePolicy, QToolBox,
     QApplication, QStyle, QToolButton, QListView, QAbstractItemView
 )
@@ -17,9 +17,11 @@ from canapp.vm.log_viewmodel import (
     CANLogLine,
     DecodedSignalLine,
     LogViewModel,
-
+    LogViewModel_QtAdapter,
+    QScrollBar,
+    QHeaderView
 )
-from canapp.widgets.TreeLogView import TreeLogView
+# from canapp.widgets.TreeLogView import TreeLogView
 
 """
 1. Display all load log files
@@ -417,9 +419,105 @@ class FileLogViewPanel(QGroupBox):
         main.addLayout(top)
 
         # ---- log pane ----
-        self.log_pane = TreeLogView(
-            view_model = self.vm,
-            parent = self
+        # self.log_pane = TreeLogView(
+        #     view_model = self.vm,
+        #     parent = self
+        # )
+
+        self.view = QTreeView(self)
+
+        ## NOTE page load tree
+        self.view.setModel(
+            self.vm.tree_model_
+        )
+
+        # self.view.setSelectionModel(
+        #     self.select_model
+        # )
+
+        mono = QFont(
+            "Consolas",
+            10,
+        )
+
+        mono.setStyleHint(
+            QFont.StyleHint.Monospace
+        )
+
+        self.view.setFont(mono)
+
+        header = self.view.header()
+
+        header.setStretchLastSection(
+            False
+        )
+
+        header.setSectionResizeMode(
+            QHeaderView.ResizeMode.Interactive
+        )
+
+        header.setFixedHeight(20)
+
+        self.view.setColumnWidth(
+            LogViewModel_QtAdapter.COL_TREND,
+            80,
+        )
+
+        self.view.setColumnWidth(
+            LogViewModel_QtAdapter.COL_LOG_MESSAGES,
+            1600,
+        )
+
+        self.view.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+
+        self.view.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+
+        self.view.setUniformRowHeights(
+            True
+        )
+
+        self.view.setAnimated(
+            False
+        )
+
+        self.view.setAutoScroll(
+            True
+        )
+
+        self.view.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+        self.view.setStyleSheet(
+            self._HOVER_STYLESHEET
+        )
+
+        layout = QHBoxLayout(self)
+
+        layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
+
+        layout.setSpacing(0)
+
+        layout.addWidget(
+            self.view
+        )
+
+        self.scrollbar = QScrollBar(
+            Qt.Orientation.Vertical,
+            self,
+        )
+
+        layout.addWidget(
+            self.scrollbar
         )
 
         main.addWidget(self.log_pane, 1)

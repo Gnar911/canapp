@@ -15,8 +15,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QAbstractListModel,
 )
-from typing import Protocol, TypeVar
-from typing import Generic, TypeVar
+from typing import Protocol, TypeVar, Generic
 
 class DisplayItem(Protocol):
     @property
