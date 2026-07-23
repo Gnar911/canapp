@@ -1,15 +1,6 @@
 from __future__ import annotations
 
-import threading
-import time
-import subprocess
-from pathlib import Path
 import pytest
-
-from cansrv.application_events import (
-    DBCLoadedEvent,
-    ParserStatusEvent,
-)
 import logging
 from lw.logger_setup import LOG
 LOG.setLevel(logging.DEBUG)

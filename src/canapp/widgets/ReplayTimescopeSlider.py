@@ -2,9 +2,9 @@ import sys
 from PySide6.QtCore import Qt, Signal, QEvent, QRectF
 from PySide6 import QtGui
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QStyle, QStyleOptionSlider, QLabel
-from ui_sdk.components.pyqt.basic_component.RangeSlider import RangeSliderWithLabels
-from can_sdk.replay_viewmodel import CANLogPlayer, ReplayStatus
-from can_sdk.canlog_viewmodel import LogContextViewModel, BasicFileLogContext, NoFilter, MsgFilter, SigFilter
+from canapp.widgets.basic_component.RangeSlider import RangeSliderWithLabels
+# from canapp.replay_viewmodel import CANLogPlayer, ReplayStatus
+# from canapp.canlog_viewmodel import LogContextViewModel, BasicFileLogContext, NoFilter, MsgFilter, SigFilter
 
 class _ReplayProgressOverlay(QWidget):
     def __init__(self, owner, slider):

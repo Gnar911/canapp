@@ -8,10 +8,10 @@ from PySide6.QtCore import Signal, Slot, QTimer, QObject
 from cs_test.mock_vm import ScannerVM
 from fs_test.mock_vm import RecordModel, RecorderStatusEvent
 from canapp.data_object import CANLogLine
-from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface
+from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, CANDBInfo
 from cansrv.status import RecorderStatus
 from lw.logger_setup import setup_logger, LOG
-from data_object import CANLogLine
+from data_object import CANLogLine, DecodedSignalLine
 
 class RecordViewModel(QObject, RecordModel, ScannerVM):
     recordingChanged = Signal()
@@ -30,7 +30,7 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
         self._timer.timeout.connect(lambda: self.progressChanged.emit())
         self._timer.stop()
 
-        self._viewport = (0, 100)
+        #self._viewport = (0, 100)
         self._auto_fetch: bool = False
 
     @property
@@ -79,17 +79,17 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
         self._auto_fetch = value
         self.recordingChanged.emit()
 
-    @property
-    def viewport(self):
-        return self._viewport
+    # @property
+    # def viewport(self):
+    #     return self._viewport
 
-    @viewport.setter
-    def viewport(self, value):
-        if self._viewport == value:
-            return
+    # @viewport.setter
+    # def viewport(self, value):
+    #     if self._viewport == value:
+    #         return
 
-        self._viewport = value
-        self.recordingChanged.emit()
+    #     self._viewport = value
+    #     self.recordingChanged.emit()
 
     """ The only place the state changed """
     def on_recorder_status(self, event: RecorderStatusEvent):
@@ -98,6 +98,7 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
         is_play = False
         record_id = event.log_id
         if status == RecorderStatus.STOPPED:
+            assert record_id is None
             is_play = False
             self._timer.stop()
         elif status == RecorderStatus.STARTED:
@@ -249,12 +250,6 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
 
     @Slot()
     def startNewRecording(self) -> None:
-        """ NOTE: True means:
-        "I successfully accepted your request.", your request has been queued
-        It does not mean recording has started.
-        If there is something wrong with the system error other than the business error -> raise the exception other than return bool
-        because the that is not what the app could handle with.
-        """
         get_file_service().start_recording()
 
     @Slot()

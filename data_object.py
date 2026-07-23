@@ -1135,13 +1135,3 @@ class DeviceInfoLine:
     def is_disconnected(self):
         return self.state is DeviceState.DISCONNECTED
 """
-@dataclass(frozen=True)
-class DeviceInfoLine:
-    vendor_name: str
-    channel_name: str
-    channel_index: int
-
-    is_available: bool
-    is_acquired: bool
-    is_disconnected: bool
-
