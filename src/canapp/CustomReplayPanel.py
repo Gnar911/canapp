@@ -3,7 +3,7 @@ from typing import Any, Optional, Set, List
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import Qt, QSortFilterProxyModel
 from PySide6.QtWidgets import QWidget
-from canapp.data_object import CANLogLine, SignalFilter
+from canapp.vm.data_object import CANLogLine, SignalFilter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QMessageBox, QApplication)
 from canapp.vm.replay_view_model import ReplayViewModel

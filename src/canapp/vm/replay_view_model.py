@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from PySide6.QtCore import Property, Signal, Slot, QObject, Qt
 from PySide6.QtGui import QStandardItemModel, QStandardItem
-from cs_test.mock_vm import *
+from cansrv.test.mock_vm import *
 from cansrv.can_srv import CANService
 from cansrv.can_srv import get_can_service
 from cansrv.file_service import LogId
@@ -133,13 +133,27 @@ class CheckItem(QStandardItem):
 
 """
 
-class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatusVM, DBCModel):
+class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, SendStatusVM, ParseModel, DBCModel):
     replayStateChanged = Signal()
     progressChanged = Signal()
     dbcChanged = Signal()
 
     def __init__(self):
-        super().__init__()
+        # QObject must be initialized once even when multiple parent __init__ are called.
+        if not getattr(self, "_qt_obj_initialized", False):
+            QObject.__init__(self)
+            self._qt_obj_initialized = True
+
+        # Qt QObject does not continue Python super() into dataclass mixins.
+        # Initialize mixins explicitly so expected event fields always exist.
+        if not getattr(self, "_replay_mixins_initialized", False):
+            ReplayStatusVM.__init__(self)
+            ScannerVM.__init__(self)
+            SendStatusVM.__init__(self)
+            ParseModel.__init__(self)
+            DBCModel.__init__(self)
+            self._replay_mixins_initialized = True
+
         self._can_service = get_can_service()
         self._dbc_id: DBCId | None = None
         self._state: ReplayState = Empty()
@@ -240,7 +254,7 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatus
             # self._can_service.set_source(source)
 
     def on_send_status(self, event: SrvEvent) -> None:
-        SendStatusVM.on_send_status(event)
+        SendStatusVM.on_send_status(self, event)
         evt = event
         if isinstance(evt, SndClear):
             self.is_active = False
@@ -256,12 +270,12 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatus
             self.current_cycle = 0
             #NOTE: Open storage to get metadata
             self._metadata = MetaDataStorageInterface(evt.source.path_token())
-            self.state = Ready(source=evt.source)
+            self.state = Ready(source=evt.source, file_name="")
             return
 
         if isinstance(evt, RplFinished):
             assert isinstance(self.state, (Playing))
-            self.state = Ready(source=self.state.source)
+            self.state = Ready(source=self.state.source, file_name=getattr(self.state, "file_name", ""))
             pass
 
         if isinstance(evt, RplCycleFinished):
@@ -271,7 +285,7 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatus
         if evt == ReplayCmdType.START or evt == ReplayCmdType.RESUME:
             """ NOTE State Transitioning """
             assert isinstance(self.state, (Ready, Paused))
-            self.state = Playing(source=self.state.source)
+            self.state = Playing(source=self.state.source, file_name=getattr(self.state, "file_name", ""))
             return
 
         if evt == ReplayInterruptCmdType.PAUSE:
@@ -281,7 +295,7 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatus
 
         if evt == ReplayInterruptCmdType.STOP:
             assert isinstance(self.state, (Playing, Paused, Ready))
-            self.state = Ready(source=self.state.source)
+            self.state = Ready(source=self.state.source, file_name=getattr(self.state, "file_name", ""))
             self.current_cycle = 0
 
             return
@@ -331,7 +345,7 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatus
             return
         
     def on_scan_status(self, payload: SrvEvent) -> None:
-        ScannerVM.on_scan_status(payload)
+        super().on_scan_status(payload)
         if isinstance(payload, ScanDevicePluggedStatus):
             # NOTE: avoid duplicate add when repeated plug notifications arrive
             # if payload.device_info not in self.available_devices:
@@ -415,27 +429,27 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, ParseModel, SendStatus
     def clearTimeScope(self):
         self._can_service.set_time_scope(None, None)
 
-    @property(bool, notify=replayStateChanged)
+    @property
     def isHavingDevice(self):
         return len(self._acquired_devices) != 0
 
-    @property(bool, notify=replayStateChanged)
+    @property
     def isReplay(self):
         return isinstance(self.state, Playing)
 
-    @property(bool, notify=replayStateChanged)
+    @property
     def isStop(self) -> bool:
         return isinstance(self.state, (Empty, Ready))
 
-    @property(bool, notify=replayStateChanged)
+    @property
     def isPause(self) -> bool:
         return isinstance(self.state, Paused)
 
-    @property(bool, notify=replayStateChanged)
+    @property
     def isHavingRecord(self) -> bool:
         return self.record_id is not None
     
-    @property(bool, notify=replayStateChanged)
+    @property
     def isEmptyRecord(self) -> bool:
         return self.record_id is None
 

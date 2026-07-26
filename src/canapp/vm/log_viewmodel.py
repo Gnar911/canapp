@@ -11,7 +11,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor
 
-from canapp.data_object import (
+from canapp.vm.data_object import (
     CANLogLine,
     DecodedSignalLine,
 )
@@ -43,764 +43,12 @@ from cansrv.test.mock_vm import *
 from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
 from cansrv.status import ParserStatus
 from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, ViewBrowser, LogQuery
-from canapp.data_object import CANLogLine, DecodedSignalLine
+from cansrv.module.fs_core import MetadataType
+from canapp.vm.data_object import CANLogLine, DecodedSignalLine
 from typing import Literal
 from lw.logger_setup import LOG
 
 RowId = int
-
-from PySide6.QtCore import (
-    QAbstractItemModel,
-    QItemSelectionModel,
-    QModelIndex,
-    Qt,
-)
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-)
-from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QHeaderView,
-    QTreeView,
-    QVBoxLayout,
-    QWidget,
-)
-
-from canapp.vm.log_viewmodel import (
-    CANLogLine,
-    DecodedSignalLine,
-    LogViewModel,
-)
-from PySide6.QtWidgets import QTreeView, QScrollBar, QHBoxLayout
-from lw.logger_setup import LOG
-
-class LogViewModel_QtAdapter(QAbstractItemModel):
-    COL_TREND = 0
-    COL_LOG_MESSAGES = 1
-
-    COLUMN_COUNT = 2
-
-    TAG_FG = {
-        "normal": QColor("#FFFFFF"),
-        "change": QColor("#FFFFFF"),
-    }
-
-    def __init__(
-        self,
-        view_model: LogViewModel,
-        parent=None,
-    ):
-        super().__init__(parent)
-
-        self._vm = view_model
-        self._vm.browseChanged.connect(
-        self._reevaluate
-        )
-        self._vm.commonStateChanged.connect(
-        self._reevaluate
-        )
-
-        """ BUG: Need to cache to avoid un-controllable re-evaluation from Qt Tree"""
-        self._entries: list[CANLogLine] = []
-
-        """ BUG: """
-        self._reevaluate()
-
-    # @property
-    # def entries(self) -> list[CANLogLine]:
-    #     return self._entries
-    
-    def _reevaluate(self):
-        # LOG.debug("Re-eval")
-        entries = self._vm.entries
-
-        self.beginResetModel()
-        self._entries = entries
-        self.endResetModel()
-
-    def columnCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        return self.COLUMN_COUNT
-
-    def rowCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        if not parent.isValid():
-            return len(self._entries)
-
-        if parent.column() != 0:
-            return 0
-
-        line = parent.internalPointer()
-
-        if isinstance(line, CANLogLine):
-            return len(line.signals)
-
-        return 0
-
-    def hasChildren(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> bool:
-        if not parent.isValid():
-            return bool(self._entries)
-
-        if parent.column() != 0:
-            return False
-
-        line = parent.internalPointer()
-
-        if isinstance(line, CANLogLine):
-            return bool(line.signals)
-
-        return False
-
-    def index(
-        self,
-        row: int,
-        column: int,
-        parent: QModelIndex = QModelIndex(),
-    ) -> QModelIndex:
-        if not self.hasIndex(
-            row,
-            column,
-            parent,
-        ):
-            return QModelIndex()
-
-        if not parent.isValid():
-            if not 0 <= row < len(self._entries):
-                return QModelIndex()
-
-            line = self._entries[row]
-
-            return self.createIndex(
-                row,
-                column,
-                line,
-            )
-
-        parent_line = parent.internalPointer()
-
-        if not isinstance(
-            parent_line,
-            CANLogLine,
-        ):
-            return QModelIndex()
-
-        if not 0 <= row < len(
-            parent_line.signals
-        ):
-            return QModelIndex()
-
-        signal = parent_line.signals[row]
-
-        return self.createIndex(
-            row,
-            column,
-            signal,
-        )
-
-    def parent(
-        self,
-        index: QModelIndex,
-    ) -> QModelIndex:
-        if not index.isValid():
-            return QModelIndex()
-
-        obj = index.internalPointer()
-
-        if isinstance(obj, CANLogLine):
-            return QModelIndex()
-
-        if not isinstance(
-            obj,
-            DecodedSignalLine,
-        ):
-            return QModelIndex()
-
-        parent_line = obj.parent
-
-        if parent_line is None:
-            return QModelIndex()
-
-        for row, line in enumerate(
-            self._entries
-        ):
-            if line is parent_line:
-                return self.createIndex(
-                    row,
-                    0,
-                    parent_line,
-                )
-
-        return QModelIndex()
-
-    def data(
-        self,
-        index: QModelIndex,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> Any:
-        if not index.isValid():
-            return None
-
-        obj = index.internalPointer()
-
-        if isinstance(obj, CANLogLine):
-            return self._line_data(
-                index,
-                obj,
-                role,
-            )
-
-        if isinstance(
-            obj,
-            DecodedSignalLine,
-        ):
-            return self._signal_data(
-                index,
-                obj,
-                role,
-            )
-
-        return None
-
-    def _line_data(
-        self,
-        index: QModelIndex,
-        line: CANLogLine,
-        role: int,
-    ) -> Any:
-        if (
-            role
-            == Qt.ItemDataRole.ForegroundRole
-        ):
-            return self.TAG_FG[
-                "change"
-                if line.changed
-                else "normal"
-            ]
-
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        column = index.column()
-
-        if column == self.COL_TREND:
-            return (
-                "●"
-                if line.changed
-                else "○"
-            )
-
-        if column == self.COL_LOG_MESSAGES:
-            return line.format_line_log()
-
-        return None
-
-    def _signal_data(
-        self,
-        index: QModelIndex,
-        signal: DecodedSignalLine,
-        role: int,
-    ) -> Any:
-        if (
-            role
-            == Qt.ItemDataRole.ForegroundRole
-        ):
-            return self.TAG_FG[
-                "change"
-                if signal.changed
-                else "normal"
-            ]
-
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        column = index.column()
-
-        if column == self.COL_TREND:
-            return (
-                "●"
-                if signal.changed
-                else ""
-            )
-
-        if column != self.COL_LOG_MESSAGES:
-            return None
-
-        signal_name = str(
-            getattr(
-                signal,
-                "_runtime_signal_name",
-                "",
-            )
-            or ""
-        )
-
-        sig_info = getattr(
-            signal,
-            "_sig_info",
-            None,
-        )
-
-        unit = ""
-
-        if sig_info is not None:
-            unit = str(
-                getattr(
-                    sig_info,
-                    "unit",
-                    "",
-                )
-                or ""
-            )
-
-        text = (
-            f"{signal_name}: "
-            f"{signal.raw_value}"
-        )
-
-        if unit:
-            text += f" {unit}"
-
-        return text
-
-    def flags(
-        self,
-        index: QModelIndex,
-    ) -> Qt.ItemFlag:
-        if not index.isValid():
-            return Qt.ItemFlag.NoItemFlags
-
-        return (
-            Qt.ItemFlag.ItemIsEnabled
-            | Qt.ItemFlag.ItemIsSelectable
-        )
-
-    def headerData(
-        self,
-        section: int,
-        orientation: Qt.Orientation,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> Any:
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        if (
-            orientation
-            != Qt.Orientation.Horizontal
-        ):
-            return None
-
-        headers = (
-            "",
-            "Log Messages",
-        )
-
-        if not 0 <= section < len(headers):
-            return None
-
-        return headers[section]
-
-
-class TreeLogSelectionModel(
-    QItemSelectionModel
-):
-    pass
-
-
-class TreeLogLazyLoadModel(QAbstractItemModel):
-    COL_TREND = 0
-    COL_LOG_MESSAGES = 1
-
-    COLUMN_COUNT = 2
-
-    TAG_FG = {
-        "normal": QColor("#FFFFFF"),
-        "change": QColor("#FFFFFF"),
-    }
-
-    def __init__(
-        self,
-        view_model: LogViewModel,
-        parent=None,
-    ):
-        super().__init__(parent)
-
-        self._vm = view_model
-
-        self._vm.browseChanged.connect(
-            self._reevaluate
-        )
-
-        self._reevaluate()
-
-    def _reevaluate(self) -> None:
-        self.beginResetModel()
-        self.endResetModel()
-
-    def columnCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        return self.COLUMN_COUNT
-
-    def rowCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        if not parent.isValid():
-            return self._vm.lazyCount
-
-        if parent.column() != 0:
-            return 0
-
-        line = parent.internalPointer()
-
-        if isinstance(line, CANLogLine):
-            return len(line.signals)
-
-        return 0
-
-    def canFetchMore(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> bool:
-        if parent.isValid():
-            return False
-
-        return (
-            self._vm.lazyCount
-            < self._vm.totalLines
-        )
-
-    def fetchMore(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> None:
-        if parent.isValid():
-            return
-
-        if not self.canFetchMore(parent):
-            return
-
-        row = self._vm.lazyCount
-
-        self.beginInsertRows(
-            QModelIndex(),
-            row,
-            row,
-        )
-
-        self._vm.lazyCount += 1
-
-        self.endInsertRows()
-
-    def hasChildren(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> bool:
-        if not parent.isValid():
-            return (
-                self._vm.lazyCount > 0
-                or self.canFetchMore(parent)
-            )
-
-        if parent.column() != 0:
-            return False
-
-        line = parent.internalPointer()
-
-        if isinstance(line, CANLogLine):
-            return bool(line.signals)
-
-        return False
-
-    """ NOTE: We dont let the Qt to manage the row state itself, we must store it on our ViewModel"""
-    def index(
-        self,
-        row: int,
-        column: int,
-        parent: QModelIndex = QModelIndex(),
-    ) -> QModelIndex:
-        if not self.hasIndex(
-            row,
-            column,
-            parent,
-        ):
-            return QModelIndex()
-
-        if not parent.isValid():
-            self._vm.row = row
-            line = self._vm.entry
-
-            if line is None:
-                return QModelIndex()
-
-            return self.createIndex(
-                row,
-                column,
-                line,
-            )
-
-        parent_line = parent.internalPointer()
-
-        if not isinstance(
-            parent_line,
-            CANLogLine,
-        ):
-            return QModelIndex()
-
-        if not 0 <= row < len(
-            parent_line.signals
-        ):
-            return QModelIndex()
-
-        signal = parent_line.signals[row]
-
-        return self.createIndex(
-            row,
-            column,
-            signal,
-        )
-
-    def parent(
-        self,
-        index: QModelIndex,
-    ) -> QModelIndex:
-        if not index.isValid():
-            return QModelIndex()
-
-        obj = index.internalPointer()
-
-        if isinstance(obj, CANLogLine):
-            return QModelIndex()
-
-        if not isinstance(
-            obj,
-            DecodedSignalLine,
-        ):
-            return QModelIndex()
-
-        parent_line = obj.parent
-
-        if parent_line is None:
-            return QModelIndex()
-
-        logical_row = getattr(
-            parent_line,
-            "_logical_row",
-            None,
-        )
-
-        if logical_row is None:
-            return QModelIndex()
-
-        return self.createIndex(
-            logical_row,
-            0,
-            parent_line,
-        )
-
-    def data(
-        self,
-        index: QModelIndex,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> Any:
-        if not index.isValid():
-            return None
-
-        obj = index.internalPointer()
-
-        if isinstance(obj, CANLogLine):
-            return self._line_data(
-                index,
-                obj,
-                role,
-            )
-
-        if isinstance(
-            obj,
-            DecodedSignalLine,
-        ):
-            return self._signal_data(
-                index,
-                obj,
-                role,
-            )
-
-        return None
-
-    def _line_data(
-        self,
-        index: QModelIndex,
-        line: CANLogLine,
-        role: int,
-    ) -> Any:
-        if (
-            role
-            == Qt.ItemDataRole.ForegroundRole
-        ):
-            return self.TAG_FG[
-                "change"
-                if line.changed
-                else "normal"
-            ]
-
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        column = index.column()
-
-        if column == self.COL_TREND:
-            return (
-                "●"
-                if line.changed
-                else "○"
-            )
-
-        if (
-            column
-            == self.COL_LOG_MESSAGES
-        ):
-            return line.format_line_log()
-
-        return None
-
-    def _signal_data(
-        self,
-        index: QModelIndex,
-        signal: DecodedSignalLine,
-        role: int,
-    ) -> Any:
-        if (
-            role
-            == Qt.ItemDataRole.ForegroundRole
-        ):
-            return self.TAG_FG[
-                "change"
-                if signal.changed
-                else "normal"
-            ]
-
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        column = index.column()
-
-        if column == self.COL_TREND:
-            return (
-                "●"
-                if signal.changed
-                else ""
-            )
-
-        if (
-            column
-            != self.COL_LOG_MESSAGES
-        ):
-            return None
-
-        signal_name = str(
-            getattr(
-                signal,
-                "_runtime_signal_name",
-                "",
-            )
-            or ""
-        )
-
-        sig_info = getattr(
-            signal,
-            "_sig_info",
-            None,
-        )
-
-        unit = ""
-
-        if sig_info is not None:
-            unit = str(
-                getattr(
-                    sig_info,
-                    "unit",
-                    "",
-                )
-                or ""
-            )
-
-        text = (
-            f"{signal_name}: "
-            f"{signal.raw_value}"
-        )
-
-        if unit:
-            text += f" {unit}"
-
-        return text
-
-    def flags(
-        self,
-        index: QModelIndex,
-    ) -> Qt.ItemFlag:
-        if not index.isValid():
-            return Qt.ItemFlag.NoItemFlags
-
-        return (
-            Qt.ItemFlag.ItemIsEnabled
-            | Qt.ItemFlag.ItemIsSelectable
-        )
-
-    def headerData(
-        self,
-        section: int,
-        orientation: Qt.Orientation,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> Any:
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        if (
-            orientation
-            != Qt.Orientation.Horizontal
-        ):
-            return None
-
-        headers = (
-            "",
-            "Log Messages",
-        )
-
-        if not (
-            0
-            <= section
-            < len(headers)
-        ):
-            return None
-
-        return headers[section]
     
 """ NOTE This class responsibility is to facing the service worker for 1 call parse log, this also have no
         responsibile for checking duplicate or block 2 parse log call service """
@@ -921,27 +169,59 @@ Q_PROPERTY(Metadata _metadata
         NOTIFY _metadataChanged)
 """
 
+""" Data View """
+@dataclass(frozen=True)
+class MessageItem:
+    data: MsgFilter
+    msg_name: str
+    checked: bool
+
+    @property
+    def show(self) -> str:
+        return f"[{self.data.can_id:03X}] {self.msg_name}"
+
+@dataclass(frozen=True)
+class SignalItem:
+    data: SigFilter
+    checked: bool
+
+@dataclass(frozen=True)
+class ChannelItem:
+    data: ChannelFilter
+    checked: bool
+
+    @property
+    def show(self) -> str:
+        return f"{self.data.channel}"
+
+# @dataclass
+# class LogDocument:
+#     log_id: LogId
+#     title: str
+
+
+""" Data Model """
 @dataclass(frozen=True)
 class NoFilter:
     pass
 
 @dataclass(frozen=True)
 class MsgFilter:
-    can_ids: List[int]
+    can_id: int
     changed: bool = False
     
 @dataclass(frozen=True)
 class SigFilter:
-    signals: List[Any]
+    signal: Any
     changed: bool = False
 
-@dataclass(frozen=True)
-class DirectionFilter:
-    direction: Literal["Rx", "Tx"]
+# @dataclass(frozen=True)
+# class DirectionFilter:
+#     direction: Literal["Rx", "Tx"]
 
 @dataclass(frozen=True)
 class ChannelFilter:
-    channels: List[str]
+    channel: str
 
 @dataclass(frozen=True)
 class TimeFilter:
@@ -950,29 +230,33 @@ class TimeFilter:
 
 @dataclass(frozen=True)
 class FilterState:
-    direction: DirectionFilter | None = None
-    message: MsgFilter | None = None
-    signal: SigFilter | None = None
-    channel: ChannelFilter | None = None
+    direction: Literal["Rx", "Tx"] | None = None
+    message: list[MsgFilter] = field(default_factory=list)
+    signal: list[SigFilter] = field(default_factory=list)
+    channel: list[ChannelFilter] = field(default_factory=list)
     time: TimeFilter | None = None
 
     def empty(self) -> bool:
-        return self == FilterState()
+        return (
+            self.direction is None
+            and not self.message
+            and not self.signal
+            and not self.channel
+            and self.time is None
+        )
 
     def to_query(self) -> LogQuery:
         query = LogQuery()
 
-        if self.message is not None:
-            query.can_ids = self.message.can_ids
-            query.changed_only = self.message.changed
+        if self.message:
+            query.can_ids = [m.can_id for m in self.message]
+            query.changed_only = any(m.changed for m in self.message)
 
-        if self.channel is not None:
-            query.channels = self.channel.channels
+        if self.channel:
+            query.channels = [c.channel for c in self.channel]
 
-        if self.direction is not None:
-            query.directions = [
-                0 if self.direction.direction == "Rx" else 1
-            ]
+        if self.direction:
+            query.directions = 0 if self.direction == "Rx" else 1
 
         if self.time is not None:
             query.first_ts = self.time.first_ts
@@ -980,13 +264,11 @@ class FilterState:
             query.has_time_range = True
 
         return query
-    
-    def reset(self):
-        self.direction = None
-        self.message = None
-        self.signal = None
-        self.channel = None
-        self.time = None
+
+    @staticmethod
+    def empty_state() -> "FilterState":
+        return FilterState()
+
 
 class LogViewModel(QObject, ParseModel, DBCModel):
     progressChanged = Signal()
@@ -998,9 +280,19 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     browseChanged = Signal()
 
-    def __init__(self):
+    logChanged = Signal(str, LogId)
 
-        super().__init__()
+    def __init__(self):
+        # QObject must be initialized only once in mixed-inheritance tests.
+        if not getattr(self, "_qt_obj_initialized", False):
+            QObject.__init__(self)
+            self._qt_obj_initialized = True
+
+        # QObject does not cooperatively initialize Python dataclass mixins.
+        if not getattr(self, "_log_mixins_initialized", False):
+            ParseModel.__init__(self)
+            DBCModel.__init__(self)
+            self._log_mixins_initialized = True
 
         """ Model -> View state (service data type)
         NOTE: 
@@ -1021,14 +313,8 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         self._dbc_id: DBCId | None = None
 
         self._metadata: MetaDataStorageInterface | None = None
-        #self._view_browser: ViewBrowser | None = None
-        self._lazy_count = 0
+        #self._log_ids: List[LogDocument] = []
 
-        # TODO: self._entries list
-        self.tree_model_ = LogViewModel_QtAdapter(self, self)
-        self.lazy_model_ = TreeLogLazyLoadModel(self, self)
-
-        self._row = 0
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(lambda: self.progressChanged.emit())
@@ -1040,48 +326,30 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         self._page_num = 0
         self._filter: FilterState = FilterState()
         self._editing_line: dict[RowId, CANLogLine] = {}
-        #self._viewport = (0, 100)
-        self._auto_fetch: bool = False   
+        #self._auto_fetch: bool = False   
         self._editable_mode: bool = False
-        self._undo_filter: bool = True
+        #self._undo_filter: bool = True
 
-    @property
-    def treeModel(self):
-        return self.tree_model_
+    # @property
+    # def treeModel(self):
+    #     return self.tree_model_
     
-    @property
-    def lazyModel(self):
-        return self.lazy_model_
+    # @property
+    # def lazyModel(self):
+    #     return self.lazy_model_
     
-    @property
-    def undoFilter(self):
-        return self._undo_filter
+    # @property
+    # def undoFilter(self):
+    #     return self._undo_filter
 
-    @undoFilter.setter
-    def undoFilter(self, value):
-        if self._undo_filter == value:
-            return
+    # @undoFilter.setter
+    # def undoFilter(self, value):
+    #     if self._undo_filter == value:
+    #         return
 
-        self._undo_filter = value
-        self.commonStateChanged.emit()
-        self.browseChanged.emit()
-
-    """ NOTE: Qt Tree will auto re-evaluate for it"""
-    @property
-    def lazyCount(self) -> int:
-        return self._lazy_count
-
-    @lazyCount.setter
-    def lazyCount(self, value: int) -> None:
-        self._lazyCount = value
-
-    @property
-    def row(self) -> int:
-        return self._row
-
-    @row.setter
-    def row(self, value: int) -> None:
-        self._row = value
+    #     self._undo_filter = value
+    #     self.commonStateChanged.emit()
+    #     self.browseChanged.emit()
 
     @property
     def pageNum(self):
@@ -1117,8 +385,8 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         if self._editable_mode == value:
             return
         # Entering editable mode forces auto-fetch off.
-        if value:
-            self._auto_fetch = False
+        # if value:
+        #     self._auto_fetch = False
 
         self._editable_mode = value
         self.commonStateChanged.emit()
@@ -1144,15 +412,49 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         return self._log_id
 
     @log_id.setter
-    def log_id(self, value):
+    def log_id(self, value: LogId):
 
         """ 20262107 BUG: if 2 callback has the same log_id -> it not re-evaluate -> log_id only can only describe 2 state, start(done) and fail
                 while the state and done should also have been distinguigh
         """
-        if self._log_id == value and not self._srv_feedback:
+        if self._log_id == value:
+        #and not self._srv_feedback
             return
 
+        LOG.debug("log_id: %s", value)
+        if value is None:
+            self._metadata = None
+            get_can_service().unset_source()
+        else:
+            self._metadata = MetaDataStorageInterface(value.path_token())
+            get_can_service().set_source(value)
+
         self._log_id = value
+
+        self.commonStateChanged.emit()
+        self.browseChanged.emit()
+        # doc = LogDocument(title=self.defaultLogName, log_id=value)
+        self.logChanged.emit(self.defaultLogName, value)
+
+    @property
+    def srv_feedback(self):
+        return self._srv_feedback
+
+    @srv_feedback.setter
+    def srv_feedback(self, value):
+
+        """ 20262107 BUG: if 2 callback has the same log_id -> it not re-evaluate -> log_id only can only describe 2 state, start(done) and fail
+                while the state and done should also have been distinguigh
+        """
+        if self._srv_feedback == value:
+            return
+
+        if value == False:
+            self._timer.start()
+        else:
+            self._timer.stop()
+
+        self._srv_feedback = value
         self.commonStateChanged.emit()
         self.browseChanged.emit()
 
@@ -1178,27 +480,24 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         """ BUG: """
         if status == ParserStatus.STARTED:
             if log_id is not None:
-                self._metadata = MetaDataStorageInterface(log_id.path_token())
-                #self._view_browser = get_file_service().browse_all(log_id)
-                self._lazy_count = 0
-                self._srv_feedback = False
-                self._timer.start()
+                # metadata = MetaDataStorageInterface(log_id.path_token())
+                srv_feedback = False
+                #self._timer.start()
+                #self._log_ids.append(log_id)
             else:
                 raise ValueError
         elif status == ParserStatus.FAILED:
-            # if log_id is None:
             assert log_id is None
-            self._srv_feedback = True
-            self._timer.stop()
-            ### NOTE: close storage
-            self._metadata = None
-            self._lazy_count = 0
+            srv_feedback = True
+            #self._timer.stop()
         elif status == ParserStatus.DONE:
             assert log_id is not None
-            self._srv_feedback = True
-            self._timer.stop()
-    
+            srv_feedback = True
+            #self._timer.stop()
+
         self.log_id = log_id
+        self.srv_feedback = srv_feedback
+
 
     def on_dbc_loaded(self, event: DBCLoadedEvent):
         DBCModel.on_dbc_model_loaded(event=event)
@@ -1225,19 +524,6 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     def closeLog(self):
         self.log_id = None
-
-    @property
-    def logTimestampRange(self) -> tuple[float, float]:
-        if self._metadata is None:
-            return (-1.0, -1.0)
-        ts = self._metadata.get_first_last_timestamp()
-        if ts is None:
-            return (-1.0, -1.0)
-        first_timestamp, last_timestamp = ts
-        return (
-            first_timestamp,
-            last_timestamp,
-        )
 
     @property
     def defaultLogName(self) -> str:
@@ -1291,169 +577,64 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     @property
     def messageFilter(self):
-        return self._filter.message
+        return self._filter
 
     @messageFilter.setter
-    def messageFilter(self, value: MsgFilter | NoFilter):
+    def messageFilter(
+        self,
+        value: MsgFilter | SigFilter | Literal["Rx", "Tx"] | None | ChannelFilter | TimeFilter | NoFilter,
+    ):
+        if isinstance(value, NoFilter):
+            self._filter = FilterState()
+
         if isinstance(value, MsgFilter):
             self._filter = replace(
                 self._filter,
-                message=value,
+                message=[value],
             )
-        elif isinstance(value, NoFilter):
-            self._filter.reset()
-        self._lazy_count = 0
 
-        """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
+        elif isinstance(value, SigFilter):
+            self._filter = replace(
+                self._filter,
+                signal=[value],
+            )
+
+        elif isinstance(value, Literal["Rx", "Tx"] | None ):
+            self._filter = replace(
+                self._filter,
+                direction=[value],
+            )
+
+        elif isinstance(value, ChannelFilter):
+            self._filter = replace(
+                self._filter,
+                channel=[value],
+            )
+
+        elif isinstance(value, TimeFilter):
+            self._filter = replace(
+                self._filter,
+                time=value,
+            )
+
         self.commonStateChanged.emit()
         self.browseChanged.emit()
 
-    @property
-    def directionFilter(self):
-        return self._filter.direction
+    # @property
+    # def directionFilter(self):
+    #     return self._filter.direction
 
-    @directionFilter.setter
-    def directionFilter(self, value: DirectionFilter | NoFilter):
-        self._filter = replace(
-            self._filter,
-            direction=value,
-        )
-        self._lazy_count = 0
+    # @directionFilter.setter
+    # def directionFilter(self, value: DirectionFilter | NoFilter):
+    #     self._filter = replace(
+    #         self._filter,
+    #         direction=value,
+    #     )
+    #     # self._lazy_count = 0
 
-        """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
-        self.commonStateChanged.emit()
-        self.browseChanged.emit()
-        
-    """
-    NOTE: Lazy load version
-    """
-    @property
-    def entry(self) -> CANLogLine | None:
-        if self._metadata is None:
-            return None
-        
-        if self._filter.empty():
-            view_browser = self._metadata.browse_all()
-        else:
-            view_browser = self._metadata.browse(self._filter.to_query())
-
-        if not 0 <= self._row < view_browser.size():
-            return None
-
-        row = view_browser.at(
-            self._row
-        )
-
-        line = CANLogLine(
-            channel=str(row.channel),
-            can_id=int(row.can_id),
-            direction=str(row.direction),
-            data_len=row.data_len,
-            data=row.data,
-            changed=bool(row.changed),
-            line_number=int(row.line_number),
-            timestamp=float(row.timestamp),
-            last_timestamp=float(
-                row.last_timestamp
-            ),
-        )
-
-        db: CANDBInfo | None = None
-
-        if self.dbc_id is not None:
-            db = get_file_service().get_candb_data(
-                self.dbc_id
-            )
-            
-        if db is not None:
-            result = db.decode_message(
-                line.can_id,
-                line.data,
-            )
-            message_def = (
-                db.get_message_by_frame_id(
-                    line.can_id
-                )
-            )
-
-            decoded_signals: list[
-                DecodedSignalLine
-            ] = []
-
-            if (
-                isinstance(result, dict)
-                and message_def is not None
-            ):
-                for sig_name, sig_value in result.items():
-                    sig_def = None
-
-                    try:
-                        sig_def = (
-                            message_def
-                            .get_signal_by_name(
-                                str(sig_name)
-                            )
-                        )
-                    except Exception:
-                        sig_def = None
-
-                    raw_value = 0
-
-                    if isinstance(
-                        sig_value,
-                        bool,
-                    ):
-                        raw_value = int(
-                            sig_value
-                        )
-
-                    elif isinstance(
-                        sig_value,
-                        (int, float),
-                    ):
-                        raw_value = int(
-                            sig_value
-                        )
-
-                    elif (
-                        sig_def is not None
-                        and getattr(
-                            sig_def,
-                            "choices",
-                            None,
-                        )
-                    ):
-                        for (
-                            choice_raw,
-                            choice_label,
-                        ) in sig_def.choices.items():
-                            if (
-                                str(choice_label)
-                                == str(sig_value)
-                            ):
-                                raw_value = int(
-                                    choice_raw
-                                )
-                                break
-
-                    sig = DecodedSignalLine(
-                        raw_value=raw_value,
-                        changed=bool(
-                            line.changed
-                        ),
-                    )
-
-                    sig._runtime_signal_name = str(
-                        sig_name
-                    )
-                    sig._sig_info = sig_def
-
-                    decoded_signals.append(
-                        sig
-                    )
-
-            line.signals = decoded_signals
-
+    #     """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
+    #     self.commonStateChanged.emit()
+    #     self.browseChanged.emit()
 
     """ NOTE: Page load version"""
     @property
@@ -1494,17 +675,7 @@ class LogViewModel(QObject, ParseModel, DBCModel):
             row = view_browser.at(i)
 
             line = CANLogLine(
-                channel=str(row.channel),
-                can_id=int(row.can_id),
-                direction=str(row.direction),
-                data_len=row.data_len,
-                data=row.data,
-                changed=bool(row.changed),
-                line_number=int(row.line_number),
-                timestamp=float(row.timestamp),
-                last_timestamp=float(
-                    row.last_timestamp
-                ),
+                data_model=row,
             )
 
             if db is not None:
@@ -1629,3 +800,73 @@ class LogViewModel(QObject, ParseModel, DBCModel):
             view_browser = self._metadata.browse(self._filter.to_query())
 
         return view_browser.size()
+
+    @property
+    def filterMessageList(self) -> list[MessageItem]:
+        if self._metadata is None:
+            return []
+
+        can_ids = self._metadata.get_metadata(MetadataType.CAN_IDS)
+        candb = (
+            get_file_service().get_candb_data(self.dbc_id)
+            if self.dbc_id is not None
+            else None
+        )
+
+        selected_by_can_id: dict[int, MsgFilter] = {
+            int(item.can_id): item
+            for item in self._filter.message
+        }
+
+        message_lists: list[MessageItem] = []
+        for can_id in can_ids:
+            msg_id = int(can_id)
+            selected = selected_by_can_id.get(
+                msg_id,
+                MsgFilter(can_id=msg_id),
+            )
+
+            msg_name = ""
+            if candb is not None:
+                try:
+                    msg_name = candb.get_message_by_frame_id(msg_id).name
+                except Exception:
+                    msg_name = ""
+
+            message_lists.append(
+                MessageItem(
+                    data=selected,
+                    msg_name=msg_name,
+                    checked=msg_id in selected_by_can_id,
+                )
+            )
+
+        return message_lists
+
+    @property
+    def filterSignalList(self) -> list[SignalItem]:
+        """ TODO: On implementation"""
+        pass
+
+    @property
+    def filterChannelList(self) -> list[ChannelItem]:
+        if self._metadata is None:
+            return []
+
+        channels = self._metadata.get_metadata(MetadataType.CHANNELS)
+        selected_channels = {
+            str(item.channel)
+            for item in self._filter.channel
+        }
+
+        channel_lists: list[ChannelItem] = []
+        for channel in channels:
+            channel_name = str(channel)
+            channel_lists.append(
+                ChannelItem(
+                    data=ChannelFilter(channel=channel_name),
+                    checked=channel_name in selected_channels,
+                )
+            )
+
+        return channel_lists

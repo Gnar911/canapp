@@ -23,19 +23,6 @@ class ChannelsTab(QtWidgets.QWidget):
         self._build_ui()
         #self.on_event_channels_scan()
 
-    # def _subscribe_vm_events(self):
-    #     event = getattr(self.vm, "event_on_channels_state_changed", None)
-    #     if event is not None:
-    #         event.subscribe(self._on_vm_channels_state_changed)
-    #         return
-
-    #     fallback_event = getattr(self.vm, "event_on_channels_scan", None)
-    #     if fallback_event is not None:
-    #         fallback_event.subscribe(self._on_vm_channels_state_changed)
-
-    # def _on_vm_channels_state_changed(self, *_):
-    #     self._channelsStateRefreshRequested.emit()
-
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -59,9 +46,14 @@ class ChannelsTab(QtWidgets.QWidget):
         select_row.addWidget(self.combo)
 
         lock_btn = QtWidgets.QPushButton("Lock Channel")
+
+        """20260726 BUG: QComboBox.currentData() can return None"""
         lock_btn.clicked.connect(
-            lambda: self.vm.acquireDevice(
-                self.combo.currentData(ListModel.ItemRole)
+            lambda: (
+                self.combo.currentData(ListModel.ItemRole) is not None
+                and self.vm.acquireDevice(
+                    self.combo.currentData(ListModel.ItemRole)
+                )
             )
         )
         select_row.addWidget(lock_btn)

@@ -8,7 +8,7 @@ from PySide6.QtCore import Signal, Slot, QTimer, QObject
 # from .base_view_model import BaseViewModel
 from cansrv.file_service import get_file_service, DBCId
 from cansrv.application_events import DBCLoadedEvent
-from fs_test.mock_vm import ParseModel, DBCModel
+from cansrv.test.mock_vm import ParseModel, DBCModel
 from pathlib import Path
 from PySide6.QtCore import (
     Qt,
@@ -23,12 +23,12 @@ class DisplayItem(Protocol):
         ...
 
 @dataclass(frozen=True)
-class DbcItem:
+class DbcItem(DisplayItem):
     dbc_id: DBCId
     file_path: str
 
 @dataclass(frozen=True)
-class MessageItem:
+class MessageItem(DisplayItem):
     can_id: int
     msg_name: str
 
@@ -37,7 +37,7 @@ class MessageItem:
         return f"[{self.can_id:03X}] {self.msg_name}"
 
 @dataclass(frozen=True)
-class SignalItem:
+class SignalItem(DisplayItem):
     can_id: int
     signal_name: str
     msg_name: str
@@ -104,7 +104,7 @@ class DbcViewModel(QObject, DBCModel):
 
     def __init__(self):
         super().__init__()
-        self._file_service = get_file_service()
+        #self._file_service = get_file_service()
         self._dbc_id: DBCId | None = None
 
         self._items: list[DbcItem] = []
@@ -202,10 +202,13 @@ class DbcViewModel(QObject, DBCModel):
         self._dbc_id = value
         self.dbcChanged.emit()
 
-    def on_dbc_loaded(self, event: DBCLoadedEvent):
-        DBCModel.on_dbc_model_loaded(event)
+    def on_dbc_model_loaded(self, event: DBCLoadedEvent):
+        super().on_dbc_model_loaded(event)
 
-        candb = self._file_service.get_candb_data(event.dbc_id)
+        if event.dbc_id is None:
+            return
+        
+        candb = get_file_service().get_candb_data(event.dbc_id)
         db_path = str(candb.file_path)
 
         item = DbcItem(event.dbc_id, db_path)
@@ -240,7 +243,7 @@ class DbcViewModel(QObject, DBCModel):
     @Slot(str)
     def loadDBC(self, db_file_path: str) -> None:
         # TODO: Could implement cache here if the same file_path and track changed
-        self._file_service.parse_dbc_file(db_file_path)
+        get_file_service().parse_dbc_file(db_file_path)
 
     """ ui binding 
     Store selected_dbc in ViewModel

@@ -1,172 +1,41 @@
 from PySide6 import QtWidgets, QtCore
-from can_sdk.connection_viewmodel import CANConnectManager, CANChannelInfo, LogContextViewModel
+# from can_sdk.connection_viewmodel import CANConnectManager, CANChannelInfo, LogContextViewModel
 import sys
 import os
-os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import Qt, QSignalBlocker
 from PySide6.QtWidgets import (QPlainTextEdit, QInputDialog, QToolBar, QVBoxLayout,)
 import PySide6QtAds as QtAds
+from canapp.DBCPanel import CANDBCPanel
+from canapp.FileLogViewPanel import FileLogViewPanel
+from canapp.FiltersPanel import FiltersPanel
+from canapp.MonitorLogViewPanel import MonitorLogViewPanel
+from canapp.CustomReplayPanel import CustomReplayPanel
+from canapp.CustomSendMessagePanel import CustomSendMessagePanel
+from canapp.vm.dbc_view_model import DbcViewModel
+from canapp.vm.log_viewmodel import LogViewModel
+from canapp.vm.record_viewmodel import RecordViewModel
+from canapp.vm.replay_view_model import ReplayViewModel
+from canapp.vm.schedule_view_model import ScheduleViewModel
 
 """
 20260207: FUCK QT
 Top / Bottom docking still works because it does NOT require a central widget.
 Left / Right docking DOES require a central widget.
 This asymmetry is by design in Qt.
+
+
+QtAds.CDockManager.setConfigFlag(
+    QtAds.CDockManager.OpaqueSplitterResize, True
+)
+QtAds.CDockManager.setConfigFlag(
+    QtAds.CDockManager.XmlCompressionEnabled, False
+)
+QtAds.CDockManager.setConfigFlag(
+    QtAds.CDockManager.FocusHighlighting, True
+)
 """
-class ConnectionBar(QtWidgets.QWidget):
-    def __init__(self, parent=None, model: CANConnectManager = None):
-        super().__init__(parent)
-        self.my_model = model
-        self.create_ui()
-        if self.my_model:
-            self.my_model.event_on_channels_state_changed.subscribe(
-                self.on_event_channels_scan
-            )
-
-    def create_ui(self):
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-
-        # --- labels
-        layout.addWidget(QtWidgets.QLabel("Channel:"))
-        self.channel_label = QtWidgets.QLabel("—")
-        self.channel_label.setMinimumWidth(80)
-        layout.addWidget(self.channel_label)
-
-        layout.addSpacing(12)
-
-        layout.addWidget(QtWidgets.QLabel("Vendor:"))
-        self.vendor_label = QtWidgets.QLabel("—")
-        self.vendor_label.setMinimumWidth(100)
-        layout.addWidget(self.vendor_label)
-
-        layout.addSpacing(12)
-
-        layout.addWidget(QtWidgets.QLabel("Status:"))
-        self.status_label = QtWidgets.QLabel("Disconnected")
-        self.status_label.setMinimumWidth(120)
-        layout.addWidget(self.status_label)
-
-        # spacer
-        layout.addStretch(1)
-
-        # disconnect button (UI only)
-        self.disconnect_btn = QtWidgets.QPushButton("Disconnect")
-        layout.addWidget(self.disconnect_btn)
-
-    def set_state(self, channel_name: str, vendor: str, connected: bool):
-        if not hasattr(self, "vendor_label"):
-            return
-
-        self.channel_label.setText(channel_name or "—")
-        self.vendor_label.setText(vendor or "—")
-
-        if connected:
-            self.status_label.setText("Connected")
-            self.status_label.setStyleSheet("color: green;")
-        else:
-            self.status_label.setText("Disconnected")
-            self.status_label.setStyleSheet("color: red;")
-
-    # ---------------------------------------------------------
-    # Backend event
-    # ---------------------------------------------------------
-    def on_event_channels_scan(self):
-        """
-        Update connection bar state here when model changes.
-        """
-        channels = self.my_model.all_channels.values()
-        active = next(
-            (
-                ch
-                for ch in channels
-                if getattr(getattr(ch, "state", None), "name", "") == "ACQUIRED"
-            ),
-            None,
-        )
-
-        if active:
-            vendor = getattr(
-                getattr(active.config, "vendor", None),
-                "name",
-                "—",
-            )
-            self.set_state(
-                channel_name=active.name,
-                vendor=vendor,
-                connected=True,
-            )
-        else:
-            self.set_state("—", "—", False)
-
-
-class WorkspaceTab(QtWidgets.QWidget):
-    def __init__(self, master, workspace_name: str, model=None, central_widget: QtWidgets.QWidget = None):
-        super().__init__(master)
-        self.workspace_name = workspace_name
-        self.model = model
-        self.central_widget = central_widget
-        self._build_ui()
-
-    # ---------------------------------------------------------
-    # UI
-    # ---------------------------------------------------------
-    def _build_ui(self):
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # connection bar
-        self.connection_bar = ConnectionBar(self, model=self.model)
-        layout.addWidget(self.connection_bar)
-
-        # --- empty workspace placeholder
-        self.dock_container = WorkspaceDockContainer(self, central_widget=self.central_widget)
-        layout.addWidget(self.dock_container, stretch=1)
-
-        #self._add_test_docks()
-
-    def _add_test_docks(self):
-        # Dock 1 - Left
-        w1 = QtWidgets.QWidget()
-        w1.setStyleSheet("background: #2b2b2b;")
-        self.dock_container.add_dock_widget(
-            "Dock A",
-            w1,
-            QtAds.DockWidgetArea.LeftDockWidgetArea,
-            self.dock_container.central_dock_area,
-        )
-
-        # Dock 2 - Right
-        w2 = QtWidgets.QWidget()
-        w2.setStyleSheet("background: #333333;")
-        self.dock_container.add_dock_widget(
-            "Dock B",
-            w2,
-            QtAds.DockWidgetArea.RightDockWidgetArea,
-            self.dock_container.central_dock_area,
-        )
-
-        # Dock 3 - Bottom
-        w3 = QtWidgets.QWidget()
-        w3.setStyleSheet("background: #3b3b3b;")
-        self.dock_container.add_dock_widget(
-            "Dock C",
-            w3,
-            QtAds.DockWidgetArea.BottomDockWidgetArea,
-            self.dock_container.central_dock_area,
-        )
-
-        # Dock 4 - Tabbed with Dock C
-        w4 = QtWidgets.QWidget()
-        w4.setStyleSheet("background: #444444;")
-        self.dock_container.add_dock_widget(
-            "Dock D",
-            w4,
-            as_tab=True,
-            relative_to_area=self.dock_container.central_dock_area,
-        )
-
 class WorkspaceDockContainer(QtWidgets.QWidget):
     """
     A QWidget that embeds a QtAds CDockManager.
@@ -174,6 +43,13 @@ class WorkspaceDockContainer(QtWidgets.QWidget):
     """
     def __init__(self, parent=None, central_widget: QtWidgets.QWidget = None):
         super().__init__(parent)
+
+        # Panel view models are owned by this dock container and injected to screens.
+        self.dbc_vm = DbcViewModel()
+        self.file_log_vm = LogViewModel()
+        self.monitor_vm = RecordViewModel()
+        self.replay_vm = ReplayViewModel()
+        self.send_vm = ScheduleViewModel()
 
         # ---- layout: optional toolbar + dock manager ----
         self._toolbar = QToolBar(self)
@@ -184,16 +60,6 @@ class WorkspaceDockContainer(QtWidgets.QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._toolbar)
 
-        # 4️⃣ NOW it is safe to configure the dock manager
-        QtAds.CDockManager.setConfigFlag(
-            QtAds.CDockManager.OpaqueSplitterResize, True
-        )
-        QtAds.CDockManager.setConfigFlag(
-            QtAds.CDockManager.XmlCompressionEnabled, False
-        )
-        QtAds.CDockManager.setConfigFlag(
-            QtAds.CDockManager.FocusHighlighting, True
-        )
 
        # 2️⃣ Create dock manager (NO config calls yet)
         self.dock_manager = QtAds.CDockManager(self)
@@ -215,193 +81,285 @@ class WorkspaceDockContainer(QtWidgets.QWidget):
         # 5️⃣ Add dock manager to layout LAST
         layout.addWidget(self.dock_manager)
 
+        # ---- DBC --------------------------------------------------------
+        dbc_dock = QtAds.CDockWidget(
+            self.dock_manager,
+            "DBC",
+            self.dock_manager,
+        )
+        dbc_dock.setObjectName("Dock_DBC")
+        dbc_dock.setWidget(CANDBCPanel(self, self.dbc_vm))
 
-    def _save_perspective(self):
-        perspective_name, ok = QInputDialog.getText(self, "Save Perspective", "Enter unique name:")
-        if not ok or not perspective_name:
-            return
+        dbc_area = self.dock_manager.addDockWidget(
+            QtAds.DockWidgetArea.LeftDockWidgetArea,
+            dbc_dock,
+            self.central_dock_area,
+        )
 
-        self.dock_manager.addPerspective(perspective_name)
-        self._refresh_perspective_list(select=perspective_name)
+        # ---- File Log ---------------------------------------------------
 
-    def _refresh_perspective_list(self, select: str | None = None):
-        blocker = QSignalBlocker(self.perspective_combo_box)
-        self.perspective_combo_box.clear()
-        self.perspective_combo_box.addItems(self.dock_manager.perspectiveNames())
-        if select:
-            self.perspective_combo_box.setCurrentText(select)
+        file_log_dock = QtAds.CDockWidget(
+            self.dock_manager,
+            "File Log",
+            self.dock_manager,
+        )
+        file_log_dock.setObjectName("Dock_FileLog")
+        file_log_dock.setWidget(FileLogViewPanel(self, self.file_log_vm))
+
+        file_log_area = self.dock_manager.addDockWidget(
+            QtAds.DockWidgetArea.BottomDockWidgetArea,
+            file_log_dock,
+            dbc_area,
+        )
+
+        # ---- Filters ----------------------------------------------------
+
+        filters_dock = QtAds.CDockWidget(
+            self.dock_manager,
+            "Filters",
+            self.dock_manager,
+        )
+        filters_dock.setObjectName("Dock_Filters")
+        filters_dock.setWidget(FiltersPanel(self, self.file_log_vm))
+
+        self.dock_manager.addDockWidgetTabToArea(
+            filters_dock,
+            file_log_area,
+        )
+
+        # ---- Monitor ----------------------------------------------------
+
+        monitor_dock = QtAds.CDockWidget(
+            self.dock_manager,
+            "Monitor",
+            self.dock_manager,
+        )
+        monitor_dock.setObjectName("Dock_Monitor")
+        monitor_dock.setWidget(MonitorLogViewPanel(self, self.monitor_vm))
+
+        monitor_area = self.dock_manager.addDockWidget(
+            QtAds.DockWidgetArea.RightDockWidgetArea,
+            monitor_dock,
+            self.central_dock_area,
+        )
+
+        # ---- Replay -----------------------------------------------------
+
+        replay_dock = QtAds.CDockWidget(
+            self.dock_manager,
+            "Replay",
+            self.dock_manager,
+        )
+        replay_dock.setObjectName("Dock_Replay")
+        replay_dock.setWidget(CustomReplayPanel(self.replay_vm, self))
+
+        self.dock_manager.addDockWidgetTabToArea(
+            replay_dock,
+            monitor_area,
+        )
+
+        # ---- Send Message -----------------------------------------------
+
+        send_dock = QtAds.CDockWidget(
+            self.dock_manager,
+            "Send Message",
+            self.dock_manager,
+        )
+        send_dock.setObjectName("Dock_SendMessage")
+        send_dock.setWidget(CustomSendMessagePanel(self, self.send_vm))
+
+        self.dock_manager.addDockWidgetTabToArea(
+            send_dock,
+            monitor_area,
+        )
+
+
+    # def _save_perspective(self):
+    #     perspective_name, ok = QInputDialog.getText(self, "Save Perspective", "Enter unique name:")
+    #     if not ok or not perspective_name:
+    #         return
+
+    #     self.dock_manager.addPerspective(perspective_name)
+    #     self._refresh_perspective_list(select=perspective_name)
+
+    # def _refresh_perspective_list(self, select: str | None = None):
+    #     blocker = QSignalBlocker(self.perspective_combo_box)
+    #     self.perspective_combo_box.clear()
+    #     self.perspective_combo_box.addItems(self.dock_manager.perspectiveNames())
+    #     if select:
+    #         self.perspective_combo_box.setCurrentText(select)
 
     # -------------------------
     # Add / remove dock widgets API (use this from WorkspaceTab)
     # -------------------------
-    def add_dock_widget(
-        self,
-        title: str,
-        widget: QtWidgets.QWidget,
-        area=QtAds.DockWidgetArea.LeftDockWidgetArea,
-        relative_to_area=None,
-        as_tab: bool = False,
-    ):
-        dw = QtAds.CDockWidget(
-            self.dock_manager,
-            title,
-            self.dock_manager,
-        )
-        dw.setWidget(widget)
-        dw.setMinimumSizeHintMode(QtAds.CDockWidget.MinimumSizeHintFromDockWidget)
+    # def add_dock_widget(
+    #     self,
+    #     title: str,
+    #     widget: QtWidgets.QWidget,
+    #     area=QtAds.DockWidgetArea.LeftDockWidgetArea,
+    #     relative_to_area=None,
+    #     as_tab: bool = False,
+    # ):
+    #     dw = QtAds.CDockWidget(
+    #         self.dock_manager,
+    #         title,
+    #         self.dock_manager,
+    #     )
+    #     dw.setWidget(widget)
+    #     dw.setMinimumSizeHintMode(QtAds.CDockWidget.MinimumSizeHintFromDockWidget)
 
-        if as_tab and relative_to_area is not None:
-            self.dock_manager.addDockWidgetTabToArea(dw, relative_to_area)
-        elif relative_to_area is not None:
-            self.dock_manager.addDockWidget(area, dw, relative_to_area)
-        else:
-            self.dock_manager.addDockWidget(area, dw)
+        # if as_tab and relative_to_area is not None:
+        #     self.dock_manager.addDockWidgetTabToArea(dw, relative_to_area)
+        # elif relative_to_area is not None:
+        #     self.dock_manager.addDockWidget(area, dw, relative_to_area)
+        # else:
+        #     self.dock_manager.addDockWidget(area, dw)
 
-        return dw
+        #return dw
 
-    def _add_demo_widgets(self):
-        # ---- Empty Pane A (left) ----
-        pane1 = QtWidgets.QWidget()
-        pane1.setStyleSheet("background: #2b2b2b;")
+    # def _add_demo_widgets(self):
+    #     # ---- Empty Pane A (left) ----
+    #     pane1 = QtWidgets.QWidget()
+    #     pane1.setStyleSheet("background: #2b2b2b;")
 
-        dw1 = QtAds.CDockWidget(
-            self.dock_manager,
-            "Pane A",
-            self.dock_manager,
-        )
-        dw1.setObjectName("Dock_Pane_A")
-        dw1.setWidget(pane1)
+    #     dw1 = QtAds.CDockWidget(
+    #         self.dock_manager,
+    #         "Pane A",
+    #         self.dock_manager,
+    #     )
+    #     dw1.setObjectName("Dock_Pane_A")
+    #     dw1.setWidget(pane1)
 
-        table_area = self.dock_manager.addDockWidget(
-            QtAds.DockWidgetArea.LeftDockWidgetArea,
-            dw1,
-            self.central_dock_area,
-        )
+    #     table_area = self.dock_manager.addDockWidget(
+    #         QtAds.DockWidgetArea.LeftDockWidgetArea,
+    #         dw1,
+    #         self.central_dock_area,
+    #     )
 
-        # ---- Empty Pane B (bottom) ----
-        pane2 = QtWidgets.QWidget()
-        pane2.setStyleSheet("background: #333333;")
+    #     # ---- Empty Pane B (bottom) ----
+    #     pane2 = QtWidgets.QWidget()
+    #     pane2.setStyleSheet("background: #333333;")
 
-        dw2 = QtAds.CDockWidget(
-            self.dock_manager,
-            "Pane B",
-            self.dock_manager,
-        )
-        dw2.setObjectName("Dock_Pane_B")
-        dw2.setWidget(pane2)
+    #     dw2 = QtAds.CDockWidget(
+    #         self.dock_manager,
+    #         "Pane B",
+    #         self.dock_manager,
+    #     )
+    #     dw2.setObjectName("Dock_Pane_B")
+    #     dw2.setWidget(pane2)
 
-        self.dock_manager.addDockWidget(
-            QtAds.DockWidgetArea.BottomDockWidgetArea,
-            dw2,
-            table_area,
-        )
+    #     self.dock_manager.addDockWidget(
+    #         QtAds.DockWidgetArea.BottomDockWidgetArea,
+    #         dw2,
+    #         table_area,
+    #     )
 
-        # ---- Empty Pane C (right) ----
-        pane3 = QtWidgets.QWidget()
-        pane3.setStyleSheet("background: #3b3b3b;")
+    #     # ---- Empty Pane C (right) ----
+    #     pane3 = QtWidgets.QWidget()
+    #     pane3.setStyleSheet("background: #3b3b3b;")
 
-        dw3 = QtAds.CDockWidget(
-            self.dock_manager,
-            "Pane C",
-            self.dock_manager,
-        )
-        dw3.setObjectName("Dock_Pane_C")
-        dw3.setWidget(pane3)
+    #     dw3 = QtAds.CDockWidget(
+    #         self.dock_manager,
+    #         "Pane C",
+    #         self.dock_manager,
+    #     )
+    #     dw3.setObjectName("Dock_Pane_C")
+    #     dw3.setWidget(pane3)
 
-        self.dock_manager.addDockWidget(
-            QtAds.DockWidgetArea.RightDockWidgetArea,
-            dw3,
-            self.central_dock_area,
-        )
+    #     self.dock_manager.addDockWidget(
+    #         QtAds.DockWidgetArea.RightDockWidgetArea,
+    #         dw3,
+    #         self.central_dock_area,
+    #     )
 
-        # ---- Empty Pane D (tabbed with C) ----
-        pane4 = QtWidgets.QWidget()
-        pane4.setStyleSheet("background: #444444;")
+    #     # ---- Empty Pane D (tabbed with C) ----
+    #     pane4 = QtWidgets.QWidget()
+    #     pane4.setStyleSheet("background: #444444;")
 
-        dw4 = QtAds.CDockWidget(
-            self.dock_manager,
-            "Pane D",
-            self.dock_manager,
-        )
-        dw4.setObjectName("Dock_Pane_D")
-        dw4.setWidget(pane4)
+    #     dw4 = QtAds.CDockWidget(
+    #         self.dock_manager,
+    #         "Pane D",
+    #         self.dock_manager,
+    #     )
+    #     dw4.setObjectName("Dock_Pane_D")
+    #     dw4.setWidget(pane4)
 
-        self.dock_manager.addDockWidgetTabToArea(
-            dw4,
-            self.central_dock_area,
-        )
+    #     self.dock_manager.addDockWidgetTabToArea(
+    #         dw4,
+    #         self.central_dock_area,
+    #     )
 
 
-if __name__ == "__main__":
-    #################### WORKSPACE TAB TEST ALL SCREEN ###################
-    ############## start date: 20260103
-    from pathlib import Path
-    from can_sdk.logger_setup import setup_logger
-    from can_sdk.context_viewmodel import GeneralContextModel
-    from can_sdk.dbc_manager import CANDBManager
-    from can_sdk.canlog_viewmodel import LogContextManager
-    from can_sdk.parser_manager import CANLogManager
-    from can_sdk.connection_viewmodel import CANConnectManager, CANDeviceType
-    from CenterContextPane import CenterContextPane
-    from FiltersPanel import FiltersPanel
-    from FileLogViewPanel import FileLogViewPanel
-    from MonitorLogViewPanel import MonitorLogViewPanel
-    from CustomSendMessagePanel import CustomSendMessagePanel
-    from CustomReplayPanel import CustomReplayPanel
-    from SignalGraphPanel import SignalGraphPanel
-    from DBC_panel import CANDBCPanel
+# if __name__ == "__main__":
+#     #################### WORKSPACE TAB TEST ALL SCREEN ###################
+#     ############## start date: 20260103
+#     from pathlib import Path
+#     from can_sdk.logger_setup import setup_logger
+#     from can_sdk.context_viewmodel import GeneralContextModel
+#     from can_sdk.dbc_manager import CANDBManager
+#     from can_sdk.canlog_viewmodel import LogContextManager
+#     from can_sdk.parser_manager import CANLogManager
+#     from can_sdk.connection_viewmodel import CANConnectManager, CANDeviceType
+#     from CenterContextPane import CenterContextPane
+#     from FiltersPanel import FiltersPanel
+#     from FileLogViewPanel import FileLogViewPanel
+#     from MonitorLogViewPanel import MonitorLogViewPanel
+#     from CustomSendMessagePanel import CustomSendMessagePanel
+#     from CustomReplayPanel import CustomReplayPanel
+#     from SignalGraphPanel import SignalGraphPanel
+#     from DBCPanel import CANDBCPanel
 
-    setup_logger(env="DEV", backup_count=30)
+#     setup_logger(env="DEV", backup_count=30)
 
-    app = QtWidgets.QApplication(sys.argv)
-    app.setStyle("Fusion")
-    app.setStyleSheet(
-        """
-        QTabBar::tab {
-            color: #E8E8E8;
-            background: #3D3D3D;
-            padding: 4px 10px;
-        }
-        QTabBar::tab:selected {
-            color: #FFFFFF;
-            background: #F26A21;
-        }
-        QTabBar::tab:hover:!selected {
-            background: #4A4A4A;
-        }
-        """
-    )
+#     app = QtWidgets.QApplication(sys.argv)
+#     app.setStyle("Fusion")
+#     app.setStyleSheet(
+#         """
+#         QTabBar::tab {
+#             color: #E8E8E8;
+#             background: #3D3D3D;
+#             padding: 4px 10px;
+#         }
+#         QTabBar::tab:selected {
+#             color: #FFFFFF;
+#             background: #F26A21;
+#         }
+#         QTabBar::tab:hover:!selected {
+#             background: #4A4A4A;
+#         }
+#         """
+#     )
 
-    win = QtWidgets.QMainWindow()
-    win.setWindowTitle("WorkspaceTab QtAds Test (Real Panels)")
-    win.resize(1400, 900)
+#     win = QtWidgets.QMainWindow()
+#     win.setWindowTitle("WorkspaceTab QtAds Test (Real Panels)")
+#     win.resize(1400, 900)
 
-    # Shared managers
-    ctx_model = GeneralContextModel()
-    center_pane = CenterContextPane(model=ctx_model)
-    conn_mgr = CANConnectManager(CANDeviceType.SOCKETCAN)
-    conn_mgr.start_scan()
+#     # Shared managers
+#     ctx_model = GeneralContextModel()
+#     center_pane = CenterContextPane(model=ctx_model)
+#     conn_mgr = CANConnectManager(CANDeviceType.SOCKETCAN)
+#     conn_mgr.start_scan()
 
-    candb = CANDBManager()
-    candb.load_database("/home/gnar911/Desktop/20260122 APP WEBSITE - CAN ANALYZER 3.0 CBCM TOOL APP ARC/CAN_Analyzer_MVVM/Database/EEA10_CANFD_R00c_withADAS_Main.dbc")
-    log_ctx_mgr = LogContextViewModel(DBM = candb)
-    FILELOG = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1_x10.asc"
-    #FILELOG = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1.asc"
-    log_ctx_mgr.request_verify_file(FILELOG)
+#     candb = CANDBManager()
+#     candb.load_database("/home/gnar911/Desktop/20260122 APP WEBSITE - CAN ANALYZER 3.0 CBCM TOOL APP ARC/CAN_Analyzer_MVVM/Database/EEA10_CANFD_R00c_withADAS_Main.dbc")
+#     log_ctx_mgr = LogContextViewModel(DBM = candb)
+#     FILELOG = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1_x10.asc"
+#     #FILELOG = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1.asc"
+#     log_ctx_mgr.request_verify_file(FILELOG)
 
-    # Acquire first available channel for send/replay panels
-    acquired_handle = None
-    second_acquired_handle = None
-    if conn_mgr.available_channels:
-        available_handles = list(conn_mgr.available_channels.keys())
-        first_handle = available_handles[0]
-        if conn_mgr.acquire(first_handle):
-            acquired_handle = first_handle
+#     # Acquire first available channel for send/replay panels
+#     acquired_handle = None
+#     second_acquired_handle = None
+#     if conn_mgr.available_channels:
+#         available_handles = list(conn_mgr.available_channels.keys())
+#         first_handle = available_handles[0]
+#         if conn_mgr.acquire(first_handle):
+#             acquired_handle = first_handle
 
-        if len(available_handles) > 1:
-            second_handle = available_handles[1]
-            if conn_mgr.acquire(second_handle):
-                second_acquired_handle = second_handle
+#         if len(available_handles) > 1:
+#             second_handle = available_handles[1]
+#             if conn_mgr.acquire(second_handle):
+#                 second_acquired_handle = second_handle
 
     ##### Expected: 20260310
     ############################## FULL TEST PANELS ##########################
@@ -563,16 +521,16 @@ if __name__ == "__main__":
     #     send_window.show()
 
     ######################## TEST FILE PANEL ######################
-    file_window = QtWidgets.QMainWindow()
-    file_window.setWindowTitle("File Log Window")
-    file_window.resize(1200, 800)
+    # file_window = QtWidgets.QMainWindow()
+    # file_window.setWindowTitle("File Log Window")
+    # file_window.resize(1200, 800)
 
-    file_panel = FileLogViewPanel(
-        parent=file_window,
-        log_ctx_mgr=log_ctx_mgr,
-    )
-    file_window.setCentralWidget(file_panel)
-    file_window.show()
+    # file_panel = FileLogViewPanel(
+    #     parent=file_window,
+    #     log_ctx_mgr=log_ctx_mgr,
+    # )
+    # file_window.setCentralWidget(file_panel)
+    # file_window.show()
 
     ######################## OTHER FILTER PANEL #####################
     # other_filter_window = QtWidgets.QMainWindow()
@@ -640,4 +598,4 @@ if __name__ == "__main__":
     # elif len(monitor_handles) == 1:
     #     print("[TEST SETUP] Only one monitor shown. Acquire a second channel to show 2 MonitorLogViewPanel windows.")
 
-    sys.exit(app.exec())
+    # sys.exit(app.exec())

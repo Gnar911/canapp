@@ -4,11 +4,9 @@ from PySide6.QtWidgets import (
     QMessageBox, QFileDialog, QComboBox, QCheckBox, QSizePolicy,
     QRadioButton, QButtonGroup, QScrollArea)
 from PySide6.QtCore import Qt, Slot
-from pathlib import Path
-import re
 from typing import Optional
-from canapp.widgets.basic_component.ReadonlyListbox import ReadOnlyListWidget
-from canapp.widgets.basic_component.CollapsibleSection import CollapsibleSection
+# from canapp.widgets.basic_component.ReadonlyListbox import ReadOnlyListWidget
+# from canapp.widgets.basic_component.CollapsibleSection import CollapsibleSection
 from canapp.vm.dbc_view_model import DbcViewModel, ListModel
 from lw.logger_setup import LOG
 # from can_sdk.logger_setup import LOG, setup_logger
@@ -521,27 +519,27 @@ class CANDBCPanel(QWidget):
     #     except re.error:
     #         return data
 
-if __name__ == "__main__":
-    import sys
-    from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
-    from PySide6.QtCore import Qt
+# if __name__ == "__main__":
+#     import sys
+#     from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
+#     from PySide6.QtCore import Qt
 
-    setup_logger(env="DEV", backup_count=30)
-    app = QApplication(sys.argv)
-    win = QWidget()
-    win.setWindowTitle("TreeLogTable Test")
-    layout = QVBoxLayout(win)
+#     setup_logger(env="DEV", backup_count=30)
+#     app = QApplication(sys.argv)
+#     win = QWidget()
+#     win.setWindowTitle("TreeLogTable Test")
+#     layout = QVBoxLayout(win)
 
-    candb = CANDBManager()
-    candb.load_database(
-        "/home/gnar911/Desktop/20260122 APP WEBSITE - CAN ANALYZER 3.0 CBCM TOOL APP ARC/CAN_Analyzer_MVVM/Database/EEA10_CANFD_R00c_withADAS_Main.dbc")
+#     candb = CANDBManager()
+#     candb.load_database(
+#         "/home/gnar911/Desktop/20260122 APP WEBSITE - CAN ANALYZER 3.0 CBCM TOOL APP ARC/CAN_Analyzer_MVVM/Database/EEA10_CANFD_R00c_withADAS_Main.dbc")
 
-    frame = CANDBCPanel(
-        parent=win, 
-        model= candb)
+#     frame = CANDBCPanel(
+#         parent=win, 
+#         model= candb)
     
-    layout.addWidget(frame)
-    win.resize(800, 500)
-    win.show()
+#     layout.addWidget(frame)
+#     win.resize(800, 500)
+#     win.show()
 
-    sys.exit(app.exec())
+#     sys.exit(app.exec())

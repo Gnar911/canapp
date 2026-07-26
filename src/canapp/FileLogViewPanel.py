@@ -17,10 +17,10 @@ from canapp.vm.log_viewmodel import (
     CANLogLine,
     DecodedSignalLine,
     LogViewModel,
-    LogViewModel_QtAdapter,
-    QScrollBar,
-    QHeaderView
+    NoFilter
 )
+from typing import Any
+from lw.qt.declarative import bind
 # from canapp.widgets.TreeLogView import TreeLogView
 
 """
@@ -37,6 +37,25 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Slot
 import os
 
+""" 20260726 NOTE: 
+QComboBox
+    combo.addItem(doc.title)
+    combo.setItemData(index, doc)
+
+    combo.currentIndexChanged.connect(onChanged)
+
+    def onChanged(index):
+        vm.setDocument(combo.itemData(index))
+
+QTabBar
+    tab.addTab(doc.title)
+    tab.setTabData(index, doc)
+
+    tab.currentChanged.connect(onChanged)
+
+    def onChanged(index):
+        vm.setDocument(tab.tabData(index))
+"""
 # class _OverlayWidget(QWidget):
 #     sig_progress = Signal(object)
 #     sig_context_changed = Signal(object)
@@ -303,16 +322,407 @@ import os
 #         self.drop_hover.hide()
 #         event.acceptProposedAction()
 
+
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QItemSelectionModel,
+    QModelIndex,
+    Qt,
+)
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QHeaderView,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
+)
+
+from PySide6.QtWidgets import QTreeView, QScrollBar, QHBoxLayout
+from lw.logger_setup import LOG
+
+class LogViewModel_QtAdapter(QAbstractItemModel):
+    COL_TREND = 0
+    COL_LOG_MESSAGES = 1
+
+    COLUMN_COUNT = 2
+
+    TAG_FG = {
+        "normal": QColor("#FFFFFF"),
+        "change": QColor("#FFFFFF"),
+    }
+
+    def __init__(
+        self,
+        view_model: LogViewModel,
+        parent=None,
+    ):
+        super().__init__(parent)
+
+        self._vm = view_model
+        self._vm.browseChanged.connect(
+        self._reevaluate
+        )
+        self._vm.commonStateChanged.connect(
+        self._reevaluate
+        )
+
+        """ BUG: Need to cache to avoid un-controllable re-evaluation from Qt Tree"""
+        self._entries: list[CANLogLine] = []
+
+        """ BUG: """
+        self._reevaluate()
+    
+    def _reevaluate(self):
+        # LOG.debug("Re-eval")
+        entries = self._vm.entries
+
+        self.beginResetModel()
+        self._entries = entries
+        self.endResetModel()
+
+    def columnCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        return self.COLUMN_COUNT
+
+    def rowCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        if not parent.isValid():
+            return len(self._entries)
+
+        if parent.column() != 0:
+            return 0
+
+        line = parent.internalPointer()
+
+        if isinstance(line, CANLogLine):
+            return len(line.signals)
+
+        return 0
+
+    def hasChildren(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> bool:
+        if not parent.isValid():
+            return bool(self._entries)
+
+        if parent.column() != 0:
+            return False
+
+        line = parent.internalPointer()
+
+        if isinstance(line, CANLogLine):
+            return bool(line.signals)
+
+        return False
+
+    def index(
+        self,
+        row: int,
+        column: int,
+        parent: QModelIndex = QModelIndex(),
+    ) -> QModelIndex:
+        if not self.hasIndex(
+            row,
+            column,
+            parent,
+        ):
+            return QModelIndex()
+
+        if not parent.isValid():
+            if not 0 <= row < len(self._entries):
+                return QModelIndex()
+
+            line = self._entries[row]
+
+            return self.createIndex(
+                row,
+                column,
+                line,
+            )
+
+        parent_line = parent.internalPointer()
+
+        if not isinstance(
+            parent_line,
+            CANLogLine,
+        ):
+            return QModelIndex()
+
+        if not 0 <= row < len(
+            parent_line.signals
+        ):
+            return QModelIndex()
+
+        signal = parent_line.signals[row]
+
+        return self.createIndex(
+            row,
+            column,
+            signal,
+        )
+
+    def parent(
+        self,
+        index: QModelIndex,
+    ) -> QModelIndex:
+        if not index.isValid():
+            return QModelIndex()
+
+        obj = index.internalPointer()
+
+        if isinstance(obj, CANLogLine):
+            return QModelIndex()
+
+        if not isinstance(
+            obj,
+            DecodedSignalLine,
+        ):
+            return QModelIndex()
+
+        parent_line = obj.parent
+
+        if parent_line is None:
+            return QModelIndex()
+
+        for row, line in enumerate(
+            self._entries
+        ):
+            if line is parent_line:
+                return self.createIndex(
+                    row,
+                    0,
+                    parent_line,
+                )
+
+        return QModelIndex()
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if not index.isValid():
+            return None
+
+        obj = index.internalPointer()
+
+        if isinstance(obj, CANLogLine):
+            return self._line_data(
+                index,
+                obj,
+                role,
+            )
+
+        if isinstance(
+            obj,
+            DecodedSignalLine,
+        ):
+            return self._signal_data(
+                index,
+                obj,
+                role,
+            )
+
+        return None
+
+    def _line_data(
+        self,
+        index: QModelIndex,
+        line: CANLogLine,
+        role: int,
+    ) -> Any:
+        if (
+            role
+            == Qt.ItemDataRole.ForegroundRole
+        ):
+            return self.TAG_FG[
+                "change"
+                if line.changed
+                else "normal"
+            ]
+
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return None
+
+        column = index.column()
+
+        if column == self.COL_TREND:
+            return (
+                "●"
+                if line.changed
+                else "○"
+            )
+
+        if column == self.COL_LOG_MESSAGES:
+            return line.format_line_log()
+
+        return None
+
+    def _signal_data(
+        self,
+        index: QModelIndex,
+        signal: DecodedSignalLine,
+        role: int,
+    ) -> Any:
+        if (
+            role
+            == Qt.ItemDataRole.ForegroundRole
+        ):
+            return self.TAG_FG[
+                "change"
+                if signal.changed
+                else "normal"
+            ]
+
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return None
+
+        column = index.column()
+
+        if column == self.COL_TREND:
+            return (
+                "●"
+                if signal.changed
+                else ""
+            )
+
+        if column != self.COL_LOG_MESSAGES:
+            return None
+
+        signal_name = str(
+            getattr(
+                signal,
+                "_runtime_signal_name",
+                "",
+            )
+            or ""
+        )
+
+        sig_info = getattr(
+            signal,
+            "_sig_info",
+            None,
+        )
+
+        unit = ""
+
+        if sig_info is not None:
+            unit = str(
+                getattr(
+                    sig_info,
+                    "unit",
+                    "",
+                )
+                or ""
+            )
+
+        text = (
+            f"{signal_name}: "
+            f"{signal.raw_value}"
+        )
+
+        if unit:
+            text += f" {unit}"
+
+        return text
+
+    def flags(
+        self,
+        index: QModelIndex,
+    ) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+
+        return (
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+        )
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return None
+
+        if (
+            orientation
+            != Qt.Orientation.Horizontal
+        ):
+            return None
+
+        headers = (
+            "",
+            "Log Messages",
+        )
+
+        if not 0 <= section < len(headers):
+            return None
+
+        return headers[section]
+
 class FileLogViewPanel(QGroupBox):
     def __init__(
         self,
-        parent: QWidget,
-        vm: LogViewModel
+        vm: LogViewModel,
+        parent = None,
     ):
         super().__init__("", parent)
         self.vm = vm
         self._build_ui()
-        self._connect_signals()
+
+        # UI → logic
+        self.log_selector.currentIndexChanged.connect(
+            lambda index: setattr(
+                self.vm,
+                "log_id",
+                self.log_selector.itemData(index),
+            )
+        )
+        self.page_selector.currentIndexChanged.connect(
+            lambda index: setattr(
+                self.vm,
+                "pageNum",
+                index,
+            )
+        )
+        self.btn_toggle_toolbox.toggled.connect(self._toggle_toolbox)
+        self.btn_open_log.clicked.connect(self._on_open_log_clicked)
+        self.btn_open_folder.clicked.connect(self._on_open_folder_clicked)
+        self.btn_refresh.clicked.connect(
+            lambda: setattr(self.vm, "messageFilter", NoFilter()))
+        # self.btn_play.clicked.connect(self._on_play_pause_clicked)
+        # self.btn_pause.clicked.connect(self._on_play_pause_clicked)
+        self.btn_edit.clicked.connect(self._on_edit_clicked)
+        self.btn_delete.clicked.connect(lambda: self.vm.closeLog())
+
+        self.vm.logChanged.connect(
+            lambda title, log_id: (
+                self.log_selector.findData(log_id) == -1
+                and self.log_selector.addItem(title, log_id)
+            )
+        )
+
     # -------------------------------------------------
     # UI
     # -------------------------------------------------
@@ -355,34 +765,34 @@ class FileLogViewPanel(QGroupBox):
         icon_folder = style.standardIcon(QStyle.SP_FileDialogNewFolder)
         icon_refresh = style.standardIcon(QStyle.SP_BrowserReload)
         icon_play = style.standardIcon(QStyle.SP_MediaPlay)
-        icon_pause = style.standardIcon(QStyle.SP_MediaPause)
+        #icon_pause = style.standardIcon(QStyle.SP_MediaPause)
         icon_edit = style.standardIcon(QStyle.SP_FileDialogDetailedView)
         icon_delete = style.standardIcon(QStyle.SP_TrashIcon)
 
         self.btn_open_log = QPushButton(icon_open_file, "File")
         self.btn_open_folder = QPushButton(icon_folder, "Folder")
         self.btn_refresh = QPushButton(icon_refresh, "Reset")
-        self.btn_play = QPushButton(icon_play, "Play")
-        self.btn_pause = QPushButton(icon_pause, "Pause")
+        #self.btn_play = QPushButton(icon_play, "Play")
+        #self.btn_pause = QPushButton(icon_pause, "Pause")
         self.btn_edit = QPushButton(icon_edit, "Edit")
         self.btn_delete = QPushButton(icon_delete, "Close")
 
-        self._is_playing = False
-        self._sync_play_pause_buttons()
+        #self._is_playing = False
+        #self._sync_play_pause_buttons()
         
         toolbox_layout.addWidget(self.btn_open_log)
         toolbox_layout.addWidget(self.btn_open_folder)
         toolbox_layout.addWidget(self.btn_refresh)
-        toolbox_layout.addWidget(self.btn_play)
-        toolbox_layout.addWidget(self.btn_pause)
+        #toolbox_layout.addWidget(self.btn_play)
+        #toolbox_layout.addWidget(self.btn_pause)
         toolbox_layout.addWidget(self.btn_edit)
         toolbox_layout.addWidget(self.btn_delete)
         toolbox_layout.addStretch(1)
         main.addWidget(self.toolbox_container)
 
         # store icons for toggling
-        self._icon_play = icon_play
-        self._icon_pause = icon_pause
+        #self._icon_play = icon_play
+        #self._icon_pause = icon_pause
 
         # ---- HEADER LABEL (replaces QGroupBox title) ----
         # self.header_label = QLabel("View page 0 / Total 0 pages")
@@ -402,17 +812,16 @@ class FileLogViewPanel(QGroupBox):
         self.page_selector.setFixedWidth(100)
         self.page_selector.setMaxVisibleItems(5)
 
-        popup_view = QListView(self.page_selector)
-        popup_view.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
-        popup_view.setUniformItemSizes(True)
-        popup_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        popup_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.page_selector.setView(popup_view)
-        self.page_selector.setStyleSheet("QComboBox { combobox-popup: 0; }")
-
-        self._enforce_page_selector_popup_limit()
-
+        # popup_view = QListView(self.page_selector)
+        # popup_view.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
+        # popup_view.setUniformItemSizes(True)
+        # popup_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        # popup_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # self.page_selector.setView(popup_view)
+        #self.page_selector.setStyleSheet("QComboBox { combobox-popup: 0; }")
+        #self._enforce_page_selector_popup_limit()
         # top.addWidget(self.canid_filter)
+
         top.addWidget(self.log_selector, 1)
         top.addWidget(self.page_selector)
 
@@ -425,10 +834,10 @@ class FileLogViewPanel(QGroupBox):
         # )
 
         self.view = QTreeView(self)
-
+        self.tree_model_ = LogViewModel_QtAdapter(self.vm)
         ## NOTE page load tree
         self.view.setModel(
-            self.vm.tree_model_
+            self.tree_model_
         )
 
         # self.view.setSelectionModel(
@@ -492,8 +901,13 @@ class FileLogViewPanel(QGroupBox):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
 
+
         self.view.setStyleSheet(
-            self._HOVER_STYLESHEET
+            """
+            QTreeView::item:hover {
+                background: rgba(255, 255, 255, 12);
+            }
+            """
         )
 
         layout = QHBoxLayout(self)
@@ -520,43 +934,20 @@ class FileLogViewPanel(QGroupBox):
             self.scrollbar
         )
 
-        main.addWidget(self.log_pane, 1)
+        main.addLayout(layout, 1)
 
         #self._update_toolbox_auto_visibility(self.vm.cur_ctx)
 
 
-    # -------------------------------------------------
-    # Wiring
-    # -------------------------------------------------
-    def _connect_signals(self):
-        # UI → logic
-        self.log_selector.currentIndexChanged.connect(self.on_log_selected)
-        self.page_selector.currentIndexChanged.connect(self.on_page_changed)
-        self.btn_toggle_toolbox.toggled.connect(self._toggle_toolbox)
-        self.btn_open_log.clicked.connect(self._on_open_log_clicked)
-        self.btn_open_folder.clicked.connect(self._on_open_folder_clicked)
-        self.btn_refresh.clicked.connect(self.btn_refresh.clicked.connect(
-            lambda: setattr(self.vm, "undoFilter", True)
-        ))
-        self.btn_play.clicked.connect(self._on_play_pause_clicked)
-        self.btn_pause.clicked.connect(self._on_play_pause_clicked)
-        self.btn_edit.clicked.connect(self._on_edit_clicked)
-        self.btn_delete.clicked.connect(lambda: self.vm.closeLog())
-        self.vm.commonStateChanged.connect(self._reevaluate)
-        self._reevaluate()    
-
-    def _reevaluate(self):
-        pass
-
-    def _enforce_page_selector_popup_limit(self):
-        view = self.page_selector.view()
-        row_h = view.sizeHintForRow(0)
-        if row_h <= 0:
-            row_h = self.page_selector.fontMetrics().height() + 8
-        frame = view.frameWidth() * 2
-        popup_h = row_h * 5 + frame
-        view.setMinimumHeight(min(row_h + frame, popup_h))
-        view.setMaximumHeight(popup_h)
+    # def _enforce_page_selector_popup_limit(self):
+    #     view = self.page_selector.view()
+    #     row_h = view.sizeHintForRow(0)
+    #     if row_h <= 0:
+    #         row_h = self.page_selector.fontMetrics().height() + 8
+    #     frame = view.frameWidth() * 2
+    #     popup_h = row_h * 5 + frame
+    #     view.setMinimumHeight(min(row_h + frame, popup_h))
+    #     view.setMaximumHeight(popup_h)
 
     def _toggle_toolbox(self, checked: bool):
         self.toolbox_container.setVisible(checked)
@@ -609,16 +1000,16 @@ class FileLogViewPanel(QGroupBox):
     # def _on_refresh_clicked(self):
     #     self.vm.undoFilter = True
 
-    @Slot()
-    def _on_play_pause_clicked(self):
-        self._is_playing = not self._is_playing
-        self._sync_play_pause_buttons()
-        # TODO: implement play/pause logic
-        pass
+    # @Slot()
+    # def _on_play_pause_clicked(self):
+    #     self._is_playing = not self._is_playing
+    #     self._sync_play_pause_buttons()
+    #     # TODO: implement play/pause logic
+    #     pass
 
-    def _sync_play_pause_buttons(self):
-        self.btn_play.setVisible(not self._is_playing)
-        self.btn_pause.setVisible(self._is_playing)
+    # def _sync_play_pause_buttons(self):
+    #     self.btn_play.setVisible(not self._is_playing)
+    #     self.btn_pause.setVisible(self._is_playing)
 
     @Slot()
     def _on_edit_clicked(self):

@@ -5,7 +5,7 @@ from typing import Any
 from PySide6.QtCore import Property, Signal, Slot, QObject
 
 # from .base_view_model import BaseViewModel
-from cs_test.mock_vm import *
+from cansrv.test.mock_vm import *
 from cansrv.can_srv import CANDeviceInfo
 from cansrv.can_srv import get_can_service
 # from canapp.data_object import DeviceInfoLine
@@ -62,7 +62,7 @@ class ListModel(QAbstractListModel):
         item = self._items[row]
 
         if role == Qt.DisplayRole:
-            return item.show
+            return item.device_id
 
         if role == self.ItemRole:
             return item
@@ -82,65 +82,40 @@ class ChannelViewModel(QObject, ScannerVM):
         self._can_service = get_can_service()
         self._available_devices: list[CANDeviceInfo] = []
         self._cbx_model = ListModel(self)
-
         self._acquired_devices: list[CANDeviceInfo] = []
 
-    """ State Machine"""
-    # @property
-    # def available_devices(self):
-    #     return self._available_devices
-    # @property
-    # def acquired_devices(self):
-    #     return self._acquired_devices
-    
-    # @acquired_devices.setter
-    # def acquired_devices(self, value):
-    #     if self._acquired_devices == value:
-    #         return
-
-    #     self._acquired_devices = value
-    #     self.deviceStateChanged.emit()
-
-    # @available_devices.setter
-    # def available_devices(self, value):
-    #     if self._available_devices == value:
-    #         return
-
-    #     self._available_devices = value
-    #     self.deviceStateChanged.emit()
-    """"""
-
     def on_scan_status(self, payload: SrvEvent) -> None:
+        super().on_scan_status(payload)
         if isinstance(payload, ScanDevicePluggedStatus):
             # NOTE: avoid duplicate add when repeated plug notifications arrive
-            if payload.device_info not in self.available_devices:
-                self.available_devices.append(payload.device_info)
+            if payload.device_info not in self._available_devices:
+                self._available_devices.append(payload.device_info)
             return
 
         if isinstance(payload, ScanDeviceUnpluggedStatus):
             device = payload.device_info
 
-            self.available_devices = [
-                d for d in self.available_devices
+            self._available_devices = [
+                d for d in self._available_devices
                 if d.device_id != device.device_id
             ]
 
-            self.acquired_devices = [
-                d for d in self.acquired_devices
+            self._acquired_devices = [
+                d for d in self._acquired_devices
                 if d.device_id != device.device_id
             ]
             return
 
         if isinstance(payload, ScanChannelAcquiredStatus):
             device = payload.device_info
-            self.available_devices.remove(device)
-            self.acquired_devices.append(device)
+            self._available_devices.remove(device)
+            self._acquired_devices.append(device)
             return
 
         if isinstance(payload, ScanChannelReleasedStatus):
             device = payload.device_info
-            self.acquired_devices.remove(device)
-            self.available_devices.append(device)
+            self._acquired_devices.remove(device)
+            self._available_devices.append(device)
             return
             
     @Slot(object, result=bool)

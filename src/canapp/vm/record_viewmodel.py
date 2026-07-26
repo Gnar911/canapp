@@ -5,33 +5,35 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import Signal, Slot, QTimer, QObject
 
 # from .base_view_model import BaseViewModel
-from cs_test.mock_vm import ScannerVM
+from cansrv.test.mock_vm import ScannerVM
 from fs_test.mock_vm import RecordModel, RecorderStatusEvent
-from canapp.data_object import CANLogLine
+from canapp.vm.data_object import CANLogLine
 from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, CANDBInfo
 from cansrv.status import RecorderStatus
 from lw.logger_setup import setup_logger, LOG
-from data_object import CANLogLine, DecodedSignalLine
+from canapp.vm.data_object import CANLogLine, DecodedSignalLine
 
 class RecordViewModel(QObject, RecordModel, ScannerVM):
     recordingChanged = Signal()
+    stateChanged = Signal()
     progressChanged = Signal()
 
     def __init__(self):
         super().__init__()
 
-        #self.record_state: RecorderStatus = RecorderStatus.STOPPED
         self._record_id: LogId | None = None
         self._is_play: bool = False
 
+        self._row = 0
         self._metadata: MetaDataStorageInterface | None = None
         self._timer = QTimer(self)
-        self._timer.setInterval(100)
+        self._timer.setInterval(1000)
         self._timer.timeout.connect(lambda: self.progressChanged.emit())
         self._timer.stop()
 
         #self._viewport = (0, 100)
-        self._auto_fetch: bool = False
+        #self._lazy_count = 0
+        #self._auto_fetch: bool = False
 
     @property
     def record_id(self) -> LogId | None:
@@ -66,29 +68,18 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
             return
         self._is_play = value
         self.recordingChanged.emit()
-
-    @property
-    def autoFetch(self):
-        return self._auto_fetch
-
-    @autoFetch.setter
-    def autoFetch(self, value):
-        if self._auto_fetch == value:
-            return
-
-        self._auto_fetch = value
-        self.recordingChanged.emit()
+        self.stateChanged.emit()
 
     # @property
-    # def viewport(self):
-    #     return self._viewport
+    # def autoFetch(self):
+    #     return self._auto_fetch
 
-    # @viewport.setter
-    # def viewport(self, value):
-    #     if self._viewport == value:
+    # @autoFetch.setter
+    # def autoFetch(self, value):
+    #     if self._auto_fetch == value:
     #         return
 
-    #     self._viewport = value
+    #     self._auto_fetch = value
     #     self.recordingChanged.emit()
 
     """ The only place the state changed """
@@ -115,138 +106,12 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
         return self.is_play
 
     @property
-    def isStop(self) -> bool:
-        return not self.is_play
-
-    @property
     def is_having_record(self) -> bool:
         return self.record_id is not None
     
     @property
     def is_empty_record(self) -> bool:
         return self.record_id is None
-
-    @property
-    def totalFrames(self) -> int:
-        if self.metadata is None:
-            return 0
-        return self.metadata.fetch_count()
-    
-    @property
-    def entries(self) -> list[CANLogLine]:
-        # NOTE: No record loaded yet
-        if self.record_id is None:
-            return []
-
-        first, count = self.viewport
-
-        if self.autoFetch:
-            first = max(self.totalFrames - count, 0)
-
-        f = self._filter
-        service = get_file_service()
-
-        can_ids = None
-        changed_only = False
-        channels = None
-        directions = None
-        time_range = None
-
-        if f.message is not None:
-            can_ids = list(f.message.can_ids)
-            changed_only = f.message.changed
-
-        if f.channel is not None:
-            channels = list(f.channel.channels)
-
-        if f.direction is not None:
-            directions = [f.direction.direction]
-
-        if f.time is not None:
-            time_range = (f.time.first_ts, f.time.last_ts)
-
-        rows = service.read_page_filtered(
-            self.record_id,
-            first,
-            first + count,
-            can_ids=can_ids,
-            channels=channels,
-            directions=directions,
-            changed_only=changed_only,
-            time_range=time_range,
-        )
-
-        db: CANDBInfo | None = None
-        # if not unload the DBC or load fail
-        if self.dbc_id is not None:
-            db = get_file_service().get_candb_data(self.dbc_id)
-
-        lines: list[CANLogLine] = []
-        for row in rows:
-            LOG.debug("Row num: %s", row.line_number)
-            line = CANLogLine(
-                channel=str(row.channel),
-                can_id=int(row.can_id),
-                direction=str(row.direction),
-                data_len=row.data_len,
-                data=row.data,
-                changed=bool(row.changed),
-                line_number=int(row.line_number),
-                timestamp=float(row.timestamp),
-                last_timestamp=float(row.last_timestamp),
-            )
-
-            # Build decoded signals only when DBC is loaded.
-            if db is not None:
-                try:
-                    result = db.decode_message(line.can_id, line.data)
-                    message_def = db.get_message_by_frame_id(line.can_id)
-                    LOG.debug("Decoded: %s", result)
-                    LOG.debug("Message def: %s", message_def)
-
-                    decoded_signals: list[DecodedSignalLine] = []
-                    if isinstance(result, dict) and message_def is not None:
-                        for sig_name, sig_value in result.items():
-                            sig_def = None
-                            try:
-                                sig_def = message_def.get_signal_by_name(str(sig_name))
-                            except Exception:
-                                sig_def = None
-
-                            LOG.debug("Sig def: %s", sig_def)
-
-                            raw_value = 0
-                            if isinstance(sig_value, bool):
-                                raw_value = int(sig_value)
-                            elif isinstance(sig_value, (int, float)):
-                                raw_value = int(sig_value)
-                            elif sig_def is not None and getattr(sig_def, "choices", None):
-                                matched = False
-                                for choice_raw, choice_label in sig_def.choices.items():
-                                    if str(choice_label) == str(sig_value):
-                                        raw_value = int(choice_raw)
-                                        matched = True
-                                        break
-                                if not matched:
-                                    raw_value = 0
-
-                            sig = DecodedSignalLine(
-                                raw_value=raw_value,
-                                changed=bool(line.changed),
-                            )
-                            sig._runtime_signal_name = str(sig_name)
-                            sig._sig_info = sig_def
-                            decoded_signals.append(sig)
-
-                    line.signals = decoded_signals
-                except Exception as e:
-                    LOG.exception("Decode failed: %s", e)
-
-            # pending = self._editing_line.get(int(line.line_number))
-            lines.append(line)
-            
-
-        return lines
 
     @Slot()
     def startNewRecording(self) -> None:
@@ -261,3 +126,144 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
         # get_file_service().save_record(self.record_id)
         #TODO: pass the record id and name to record app store
         return False
+
+    """ NOTE: Qt Tree will auto re-evaluate for it"""
+    @property
+    def totalRows(self) -> int:
+        if self.metadata is None:
+            return 0
+        return self.metadata.fetch_count()
+
+    # @property
+    # def loadedRows(self) -> int:
+    #     pass
+
+    @property
+    def row(self) -> int:
+        return self._row
+
+    @row.setter
+    def row(self, value: int) -> None:
+        self._row = value
+
+    """
+    NOTE: Lazy load version
+    """
+    @property
+    def entry(self) -> CANLogLine | None:
+        if self._metadata is None:
+            return None
+        
+        # if self._filter.empty():
+        #     view_browser = self._metadata.browse_all()
+        # else:
+        #     view_browser = self._metadata.browse(self._filter.to_query())
+
+        view_browser = self._metadata.browse_all()
+
+        if not 0 <= self._row < view_browser.size():
+            return None
+
+        row = view_browser.at(
+            self._row
+        )
+
+        line = CANLogLine(
+            data_model=row,
+        )
+
+        db: CANDBInfo | None = None
+
+        if self.dbc_id is not None:
+            db = get_file_service().get_candb_data(
+                self.dbc_id
+            )
+            
+        if db is not None:
+            result = db.decode_message(
+                line.can_id,
+                line.data,
+            )
+            message_def = (
+                db.get_message_by_frame_id(
+                    line.can_id
+                )
+            )
+
+            decoded_signals: list[
+                DecodedSignalLine
+            ] = []
+
+            if (
+                isinstance(result, dict)
+                and message_def is not None
+            ):
+                for sig_name, sig_value in result.items():
+                    sig_def = None
+
+                    try:
+                        sig_def = (
+                            message_def
+                            .get_signal_by_name(
+                                str(sig_name)
+                            )
+                        )
+                    except Exception:
+                        sig_def = None
+
+                    raw_value = 0
+
+                    if isinstance(
+                        sig_value,
+                        bool,
+                    ):
+                        raw_value = int(
+                            sig_value
+                        )
+
+                    elif isinstance(
+                        sig_value,
+                        (int, float),
+                    ):
+                        raw_value = int(
+                            sig_value
+                        )
+
+                    elif (
+                        sig_def is not None
+                        and getattr(
+                            sig_def,
+                            "choices",
+                            None,
+                        )
+                    ):
+                        for (
+                            choice_raw,
+                            choice_label,
+                        ) in sig_def.choices.items():
+                            if (
+                                str(choice_label)
+                                == str(sig_value)
+                            ):
+                                raw_value = int(
+                                    choice_raw
+                                )
+                                break
+
+                    sig = DecodedSignalLine(
+                        raw_value=raw_value,
+                        changed=bool(
+                            line.changed
+                        ),
+                    )
+
+                    sig._runtime_signal_name = str(
+                        sig_name
+                    )
+                    sig._sig_info = sig_def
+
+                    decoded_signals.append(
+                        sig
+                    )
+
+            line.signals = decoded_signals

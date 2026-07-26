@@ -224,6 +224,133 @@ class RawBytesEditBox(QtWidgets.QLineEdit):
         return out
 
 
+class Debouncer(QtCore.QObject):
+    """
+    Simple debouncer for text parsing / UI updates.
+    """
+    timeout = QtCore.Signal()
+
+    def __init__(self, ms: int, parent: Optional[QtCore.QObject] = None):
+        super().__init__(parent)
+        self._timer = QtCore.QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(ms)
+        self._timer.timeout.connect(self.timeout.emit)
+
+    def start(self):
+        self._timer.start()
+
+    def stop(self):
+        self._timer.stop()
+
+_HEX_BYTE_RE = re.compile(r"^[0-9a-fA-F]{0,2}$")
+
+
+class HexByteLineEdit(QtWidgets.QLineEdit):
+    """
+    1-byte hex editor:
+    - accepts 0..FF (no 0x)
+    - always displays uppercase
+    - grey if 00, blue if != 00, red if invalid
+    """
+    valueChanged = QtCore.Signal(int)  # emits 0..255
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.setMaxLength(2)
+        self.setFixedSize(26, 22)
+        self.setAlignment(Qt.AlignCenter)
+        self.setTextMargins(0, 0, 0, 0)
+        self.setStyleSheet("QLineEdit { padding: 0px; margin: 0px; }")
+
+        # validator: allow empty or 1-2 hex digits
+        self._validator = QtGui.QRegularExpressionValidator(
+            QtCore.QRegularExpression(r"^[0-9a-fA-F]{0,2}$"),
+            self,
+        )
+        self.setValidator(self._validator)
+
+        self.textEdited.connect(self._on_text_edited)
+        self.editingFinished.connect(self._normalize)
+        self._apply_color()
+
+        self._is_default_value = True
+        self._has_baseline = False
+        self._baseline_value = 0
+
+        # better monospace for bytes
+        f = self.font()
+        f.setFamily("Monospace")
+        self.setFont(f)
+
+    def _on_text_edited(self, _t: str):
+        self._is_default_value = False
+        self._apply_color()
+        v = self.value()
+        if v is not None:
+            self.valueChanged.emit(v)
+
+    def _normalize(self):
+        # normalize to 2-digit uppercase (or empty -> "00")
+        t = self.text().strip()
+        if t == "":
+            self.setText("00")
+        else:
+            try:
+                v = int(t, 16)
+                v = max(0, min(255, v))
+                self.setText(f"{v:02X}")
+            except Exception:
+                # keep as-is if invalid
+                pass
+        self._apply_color()
+
+    def _apply_color(self):
+        t = self.text().strip()
+        if t == "":
+            # neutral
+            self.setStyleSheet("QLineEdit{color:#303030;}")
+            return
+        if not _HEX_BYTE_RE.fullmatch(t):
+            self.setStyleSheet("QLineEdit{color:red;}")
+            return
+        try:
+            int(t, 16)
+        except Exception:
+            self.setStyleSheet("QLineEdit{color:red;}")
+            return
+        if not self._is_default_value:
+            self.setStyleSheet("QLineEdit{color:#0066CC;}")
+            return
+        self.setStyleSheet("QLineEdit{color:#FFFFFF;}")
+
+    def value(self) -> Optional[int]:
+        t = self.text().strip()
+        if t == "":
+            return 0
+        if not _HEX_BYTE_RE.fullmatch(t):
+            return None
+        try:
+            return int(t, 16)
+        except Exception:
+            return None
+
+    def set_value(self, v: int, is_default: bool = False):
+        v = max(0, min(255, int(v)))
+        self._is_default_value = is_default
+        self.setText(f"{v:02X}")
+        self._apply_color()
+
+    def set_baseline(self, v: int):
+        self._has_baseline = True
+        self._baseline_value = max(0, min(255, int(v)))
+        self._apply_color()
+
+    def clear_baseline(self):
+        self._has_baseline = False
+        self._baseline_value = 0
+        self._apply_color()
+        
 class TimeEditBox(QtWidgets.QLineEdit):
     """
     Duration editor with adaptive display:

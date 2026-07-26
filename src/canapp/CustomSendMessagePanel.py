@@ -1,21 +1,27 @@
 from PySide6.QtCore import Qt
-from can_sdk.dbc_manager import CANDBManager 
-from can_sdk.connection_viewmodel import CANConnectManager, Handle, CANSendManager
-from can_sdk.logger_setup import LOG, setup_logger
+# from can_sdk.dbc_manager import CANDBManager 
+# from can_sdk.connection_viewmodel import CANConnectManager, Handle, CANSendManager
+# from can_sdk.logger_setup import LOG, setup_logger
 from typing import Optional
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QMessageBox, QPushButton, QApplication)
 from PySide6.QtCore import Slot, Qt
-from ui_sdk.components.pyqt.TreeSenderTable import TreeSenderTable
-from ui_sdk.components.pyqt.DBCCombobox import DBCComboBox
-from ui_sdk.components.pyqt.ChannelComboBox import ChannelComboBox
-from ui_sdk.components.pyqt.ParseableEditBox import CanIdEditBox, RawBytesEditBox
-from ui_sdk.components.pyqt.DLCSpinbox import DLCSpinBox
-from can_sdk.data_object import CANLogLine, CANLogPlay, SignalFilter, SendState
-from can_sdk.global_event import event_on_signal_select
+# from canapp.widgets.TreeSenderTable import TreeSenderTable
+# from canapp.widgets.DBCCombobox import DBCComboBox
+# from canapp.widgets.ChannelComboBox import ChannelComboBox
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QItemSelectionModel,
+    QModelIndex,
+    Qt,
+)
+from canapp.widgets.ParseableEditBox import CanIdEditBox, RawBytesEditBox
+from canapp.widgets.DLCSpinbox import DLCSpinBox
+# from can_sdk.data_object import CANLogLine, CANLogPlay, SignalFilter, SendState
+# from can_sdk.global_event import event_on_signal_select
 from ultility import bytes_to_hex_raw, hex_raw_to_bytes 
 # TEST module
-from can_sdk.parser import LogParser
-from can_sdk.connection_viewmodel import CANConnectManager, Handle, CANDeviceType, ChannelContext
+# from can_sdk.parser import LogParser
+# from can_sdk.connection_viewmodel import CANConnectManager, Handle, CANDeviceType, ChannelContext
 import sys
 import re
 import math
@@ -23,261 +29,1015 @@ from dataclasses import dataclass
 from typing import Any, Optional, Callable, Dict, List, Tuple
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
+from copy import deepcopy
+from typing import Any, Optional
 
-# -----------------------------
-# Helpers / Small widgets
-# -----------------------------
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QModelIndex,
+    Qt,
+)
+from PySide6.QtGui import (
+    QFont,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QHeaderView,
+    QLineEdit,
+    QStyledItemDelegate,
+    QToolTip,
+    QToolButton,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
+)
 
-_HEX_BYTE_RE = re.compile(r"^[0-9a-fA-F]{0,2}$")
+from canapp.widgets.ParseableEditBox import (
+    TimeEditBox,
+    RawBytesEditBox,
+)
+from canapp.widgets.DLCSpinbox import DLCSpinBox
+from canapp.widgets.DlcRawBinder import DlcRawBinder
+from canapp.vm.schedule_view_model import \
+    CANLogPlay, DecodedSignalLine, ScheduleViewModel, MessageItem, CANDeviceInfo
 
+""" NOTE:
+Model change	                            Qt notification
+is_play, is_pause, direction, etc. changed	dataChanged -> ask data() again
+rows inserted	                            beginInsertRows/endInsertRows
+rows removed	                            beginRemoveRows/endRemoveRows
+whole dataset replaced                  	beginResetModel/endResetModel
+"""
+class LogEditViewModel_QtAdapter(QAbstractItemModel):
+    PLAY_ROLE = Qt.ItemDataRole.UserRole
+    DEVICE_OPTIONS_ROLE = (Qt.ItemDataRole.UserRole + 1)
+    DBC_OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 2
+    COL_STATUS = 0
+    COL_DEVICE = 1
+    COL_STR_DIFF = 2
+    COL_DIRECTION = 3
+    COL_CAN_ID_STR = 4
+    COL_MSG_NAME = 5
+    COL_DATA_LEN = 6
+    COL_RAW_DATA_BYTES = 7
 
-class HexByteLineEdit(QtWidgets.QLineEdit):
-    """
-    1-byte hex editor:
-    - accepts 0..FF (no 0x)
-    - always displays uppercase
-    - grey if 00, blue if != 00, red if invalid
-    """
-    valueChanged = QtCore.Signal(int)  # emits 0..255
+    COLUMN_COUNT = 8
 
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(
+        self,
+        vm: ScheduleViewModel,
+        # entries: list[CANLogPlay],
+        parent=None,
+    ):
         super().__init__(parent)
-        self.setMaxLength(2)
-        self.setFixedSize(26, 22)
-        self.setAlignment(Qt.AlignCenter)
-        self.setTextMargins(0, 0, 0, 0)
-        self.setStyleSheet("QLineEdit { padding: 0px; margin: 0px; }")
 
-        # validator: allow empty or 1-2 hex digits
-        self._validator = QtGui.QRegularExpressionValidator(
-            QtCore.QRegularExpression(r"^[0-9a-fA-F]{0,2}$"),
-            self,
+        self._entries = vm._entries
+        self._devices = vm._acquired_devices
+        self._dbc_data = vm.canIDList
+
+        vm.entriesChanged.connect(
+            self._reevaluate
         )
-        self.setValidator(self._validator)
 
-        self.textEdited.connect(self._on_text_edited)
-        self.editingFinished.connect(self._normalize)
-        self._apply_color()
+        vm.dbcChanged.connect(
+            lambda:
+            (
+                setattr(
+                    self,
+                    "_dbc_data",
+                    vm.canIDList,
+                ),
+                #self._reevaluate(),
+            )
+        )
 
-        self._is_default_value = True
-        self._has_baseline = False
-        self._baseline_value = 0
+    def _reevaluate(self):
+        self.beginResetModel()
+        self.endResetModel()
 
-        # better monospace for bytes
-        f = self.font()
-        f.setFamily("Monospace")
-        self.setFont(f)
+    def columnCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        return self.COLUMN_COUNT
 
-    def _on_text_edited(self, _t: str):
-        self._is_default_value = False
-        self._apply_color()
-        v = self.value()
-        if v is not None:
-            self.valueChanged.emit(v)
+    def rowCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        if not parent.isValid():
+            return len(self._entries)
 
-    def _normalize(self):
-        # normalize to 2-digit uppercase (or empty -> "00")
-        t = self.text().strip()
-        if t == "":
-            self.setText("00")
-        else:
-            try:
-                v = int(t, 16)
-                v = max(0, min(255, v))
-                self.setText(f"{v:02X}")
-            except Exception:
-                # keep as-is if invalid
-                pass
-        self._apply_color()
-
-    def _apply_color(self):
-        t = self.text().strip()
-        if t == "":
-            # neutral
-            self.setStyleSheet("QLineEdit{color:#303030;}")
-            return
-        if not _HEX_BYTE_RE.fullmatch(t):
-            self.setStyleSheet("QLineEdit{color:red;}")
-            return
-        try:
-            int(t, 16)
-        except Exception:
-            self.setStyleSheet("QLineEdit{color:red;}")
-            return
-        if not self._is_default_value:
-            self.setStyleSheet("QLineEdit{color:#0066CC;}")
-            return
-        self.setStyleSheet("QLineEdit{color:#FFFFFF;}")
-
-    def value(self) -> Optional[int]:
-        t = self.text().strip()
-        if t == "":
+        if parent.column() != 0:
             return 0
-        if not _HEX_BYTE_RE.fullmatch(t):
+
+        obj = parent.internalPointer()
+
+        if isinstance(obj, CANLogPlay):
+            return len(obj.signals)
+
+        return 0
+
+    def hasChildren(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> bool:
+        if not parent.isValid():
+            return bool(self._entries)
+
+        if parent.column() != 0:
+            return False
+
+        obj = parent.internalPointer()
+
+        return (
+            isinstance(obj, CANLogPlay)
+            and bool(obj.signals)
+        )
+
+    def index(
+        self,
+        row: int,
+        column: int,
+        parent: QModelIndex = QModelIndex(),
+    ) -> QModelIndex:
+        if not self.hasIndex(
+            row,
+            column,
+            parent,
+        ):
+            return QModelIndex()
+
+        if not parent.isValid():
+            return self.createIndex(
+                row,
+                column,
+                self._entries[row],
+            )
+
+        parent_obj = parent.internalPointer()
+
+        if not isinstance(
+            parent_obj,
+            CANLogPlay,
+        ):
+            return QModelIndex()
+
+        if not 0 <= row < len(
+            parent_obj.signals
+        ):
+            return QModelIndex()
+
+        return self.createIndex(
+            row,
+            column,
+            parent_obj.signals[row],
+        )
+
+    def parent(
+        self,
+        index: QModelIndex,
+    ) -> QModelIndex:
+        if not index.isValid():
+            return QModelIndex()
+
+        obj = index.internalPointer()
+
+        if isinstance(obj, CANLogPlay):
+            return QModelIndex()
+
+        if not isinstance(
+            obj,
+            DecodedSignalLine,
+        ):
+            return QModelIndex()
+
+        parent_obj = obj.parent
+
+        if parent_obj is None:
+            return QModelIndex()
+
+        for row, entry in enumerate(
+            self._entries
+        ):
+            if entry is parent_obj:
+                return self.createIndex(
+                    row,
+                    0,
+                    parent_obj,
+                )
+
+        return QModelIndex()
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if not index.isValid():
             return None
-        try:
-            return int(t, 16)
-        except Exception:
+
+        obj = index.internalPointer()
+        column = index.column()
+
+        if role == self.PLAY_ROLE and isinstance(obj, CANLogPlay):
+            return obj.data_model
+
+        if role == self.PLAY_ROLE and isinstance(obj, DecodedSignalLine):
+            #TODO: Select signal
+            #return obj.data
+            pass
+
+        if (index.column() == self.COL_DEVICE and role == self.DEVICE_OPTIONS_ROLE):
+            return self._devices
+
+        if (index.column() == self.COL_CAN_ID_STR and role == self.DBC_OPTIONS_ROLE):
+            return self._dbc_data
+
+        """ NOTE: Display signal rows"""
+        if (role == Qt.ItemDataRole.DisplayRole) and isinstance(obj,DecodedSignalLine,):
+            if (
+                column
+                == self.COL_DEVICE
+            ):
+                #TODO: Signal decode on developing
+                #return obj.show_signal
+                pass
+
+        """ NOTE: Display message rows"""
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole,) and isinstance(obj,CANLogPlay,):
+            if (
+                column
+                == self.COL_DEVICE
+            ):
+                return obj.device_info
+
+            if (
+                column
+                == self.COL_STATUS
+            ):
+                return obj.status_display
+
+            if (
+                column
+                == self.COL_STR_DIFF
+            ):
+                return obj.initial_periodic
+
+            if (
+                column
+                == self.COL_DIRECTION
+            ):
+                return obj.direction
+
+            if (
+                column
+                == self.COL_CAN_ID_STR
+            ):
+                return f"0x{obj.can_id:X}"
+
+            if (
+                column
+                == self.COL_MSG_NAME
+            ):
+                return obj.message_name
+
+            if (
+                column
+                == self.COL_DATA_LEN
+            ):
+                return obj.data_len
+
+            if (
+                column
+                == self.COL_RAW_DATA_BYTES
+            ):
+                return obj.raw_data
+
+        return None
+
+    def flags(
+        self,
+        index: QModelIndex,
+    ) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+
+        flags = (
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+        )
+
+        obj = index.internalPointer()
+
+        if not isinstance(
+            obj,
+            CANLogPlay,
+        ):
+            return flags
+
+        if index.column() in (
+            self.COL_MSG_NAME,
+            self.COL_CAN_ID_STR,
+            self.COL_DEVICE,
+            self.COL_STR_DIFF,
+            self.COL_DIRECTION,
+            self.COL_DATA_LEN,
+            self.COL_RAW_DATA_BYTES,
+        ):
+            flags |= (
+                Qt.ItemFlag.ItemIsEditable
+            )
+
+        return flags
+
+    def setData(
+        self,
+        index: QModelIndex,
+        value: Any,
+        role: int = Qt.ItemDataRole.EditRole,
+    ) -> bool:
+        if (
+            role
+            != Qt.ItemDataRole.EditRole
+        ):
+            return False
+
+        if not index.isValid():
+            return False
+
+        obj = index.internalPointer()
+
+        if not isinstance(
+            obj,
+            CANLogPlay,
+        ):
+            return False
+
+        if not (
+            self.flags(index)
+            & Qt.ItemFlag.ItemIsEditable
+        ):
+            return False
+
+        column = index.column()
+
+        if (
+            column
+            == self.COL_CAN_ID_STR
+        ) and isinstance(value, MessageItem):
+            obj.device_info = value.can_id
+            obj.message_name = value.msg_name
+
+        elif (
+            column
+            == self.COL_DEVICE
+        ):
+            obj.device_info = value
+
+        elif (
+            column
+            == self.COL_STR_DIFF
+        ):
+            obj.initial_periodic = str(value)
+
+        elif (
+            column
+            == self.COL_DIRECTION
+        ):
+            obj.direction = str(value)
+
+        elif (
+            column
+            == self.COL_MSG_NAME
+        ):
+            obj.message_name = str(value)
+
+        elif (
+            column
+            == self.COL_DATA_LEN
+        ):
+            obj.data_len = int(value)
+
+        elif (
+            column
+            == self.COL_RAW_DATA_BYTES
+        ):
+            obj.raw_data = str(value)
+
+        else:
+            return False
+
+        self.dataChanged.emit(
+            index,
+            index,
+            [
+                Qt.ItemDataRole.DisplayRole,
+                Qt.ItemDataRole.EditRole,
+                Qt.ItemDataRole.UserRole,
+            ],
+        )
+
+        return True
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
             return None
 
-    def set_value(self, v: int, is_default: bool = False):
-        v = max(0, min(255, int(v)))
-        self._is_default_value = is_default
-        self.setText(f"{v:02X}")
-        self._apply_color()
+        if (
+            orientation
+            != Qt.Orientation.Horizontal
+        ):
+            return None
 
-    def set_baseline(self, v: int):
-        self._has_baseline = True
-        self._baseline_value = max(0, min(255, int(v)))
-        self._apply_color()
+        headers = (
+            "Status",
+            "Channel",
+            "Diff",
+            "Direction",
+            "CAN ID",
+            "Message",
+            "DLC",
+            "Data",
+        )
 
-    def clear_baseline(self):
-        self._has_baseline = False
-        self._baseline_value = 0
-        self._apply_color()
+        if not 0 <= section < len(
+            headers
+        ):
+            return None
 
+        return headers[section]
 
-class Debouncer(QtCore.QObject):
-    """
-    Simple debouncer for text parsing / UI updates.
-    """
-    timeout = QtCore.Signal()
-
-    def __init__(self, ms: int, parent: Optional[QtCore.QObject] = None):
+""" NOTE:
+SendViewModel
+    │
+    │ owns
+    ▼
+_entries: list[CANLogPlay]
+    │
+    │ reference
+    ▼
+QAbstractItemModel
+    │
+    ├──────────────────────────► QTreeView
+    │                              │
+    │                              │ uses
+    │                              ▼
+    │                     QStyledItemDelegate
+    │                              │
+    │                    editor value only
+    │                              │
+    ◄──────────────────────────────┘
+         model.setData(index, value)
+"""
+class _TreeLogEditDelegate(
+    QStyledItemDelegate
+):
+    def __init__(
+        self,
+        parent=None,
+    ):
         super().__init__(parent)
-        self._timer = QtCore.QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(ms)
-        self._timer.timeout.connect(self.timeout.emit)
 
-    def start(self):
-        self._timer.start()
+        self._dlc_raw_binder = (
+            DlcRawBinder()
+        )
 
-    def stop(self):
-        self._timer.stop()
+        self._row_height: Optional[int] = None
 
+        # self._hovered_index = (
+        #     QModelIndex()
+        # )
+    # def set_hovered_index(
+    #     self,
+    #     index: QModelIndex,
+    # ) -> tuple[
+    #     QModelIndex,
+    #     QModelIndex,
+    # ]:
+    #     old = self._hovered_index
+
+    #     new = (
+    #         index
+    #         if index.isValid()
+    #         else QModelIndex()
+    #     )
+
+    #     if self._is_same_cell(
+    #         old,
+    #         new,
+    #     ):
+    #         return old, new
+
+    #     self._hovered_index = new
+
+    #     return old, new
+
+    # def clear_hover(
+    #     self,
+    # ) -> QModelIndex:
+    #     old = self._hovered_index
+
+    #     self._hovered_index = (
+    #         QModelIndex()
+    #     )
+
+    #     return old
+
+    # def _is_same_cell(
+    #     self,
+    #     a: QModelIndex,
+    #     b: QModelIndex,
+    # ) -> bool:
+    #     return (
+    #         a.isValid()
+    #         and b.isValid()
+    #         and a.row() == b.row()
+    #         and a.column() == b.column()
+    #         and a.parent() == b.parent()
+    #     )
+
+    # def set_row_height(
+    #     self,
+    #     height: Optional[int],
+    # ) -> None:
+    #     self._row_height = (
+    #         None
+    #         if height is None
+    #         else max(
+    #             1,
+    #             int(height),
+    #         )
+    #     )
+
+    # def sizeHint(
+    #     self,
+    #     option,
+    #     index,
+    # ):
+    #     size = super().sizeHint(
+    #         option,
+    #         index,
+    #     )
+
+    #     if (
+    #         self._row_height
+    #         is not None
+    #     ):
+    #         size.setHeight(
+    #             self._row_height
+    #         )
+
+    #     return size
+
+    def createEditor(
+        self,
+        parent,
+        option,
+        index,
+    ):
+        if not index.isValid():
+            return None
+
+        model = index.model()
+
+        if not (
+            model.flags(index)
+            & Qt.ItemFlag.ItemIsEditable
+        ):
+            return None
+
+        column = index.column()
+
+        """ NOTE: Qt does not automatically call createEditor() again
+                when user is opening the combobox
+        """
+        if (
+            index.column() == LogEditViewModel_QtAdapter.COL_DEVICE):
+            editor = QComboBox(parent)
+
+            devices = index.data(LogEditViewModel_QtAdapter.DEVICE_OPTIONS_ROLE)
+
+            """20260726 BUG: index.data() can return None"""
+            for device in (devices or []):
+                if isinstance(device, CANDeviceInfo):
+                    editor.addItem(
+                        device.device_id,
+                        device,
+                    )
+
+            return editor
+
+        if (
+            index.column() == LogEditViewModel_QtAdapter.COL_CAN_ID_STR):
+            editor = QComboBox(parent)
+
+            dbc_data = index.data(LogEditViewModel_QtAdapter.DBC_OPTIONS_ROLE)
+
+            """20260726 BUG: index.data() can return None"""
+            for data in (dbc_data or []):
+                if isinstance(data, MessageItem):
+                    editor.addItem(
+                        data.can_id_list_display,
+                        data,
+                    )
+
+            return editor
+
+        if (
+            column
+            == model.COL_STR_DIFF
+        ):
+            return TimeEditBox(
+                parent
+            )
+
+        if (
+            column
+            == model.COL_CAN_ID_STR
+        ):
+            # return CanIdEditBox(
+            #     parent
+            # )
+            return QComboBox(
+                parent
+            )
+
+        if (
+            column
+            == model.COL_MSG_NAME
+        ):
+            return QLineEdit(
+                parent
+            )
+
+        if (
+            column
+            == model.COL_DIRECTION
+        ):
+            editor = QComboBox(
+                parent
+            )
+
+            editor.addItems(
+                [
+                    "Rx",
+                    "Tx",
+                ]
+            )
+
+            return editor
+
+        if (
+            column
+            == model.COL_DATA_LEN
+        ):
+            editor = DLCSpinBox(
+                parent
+            )
+
+            self._dlc_raw_binder.bind_dlc_editor(
+                editor,
+                index,
+            )
+
+            return editor
+
+        if (
+            column
+            == model.COL_RAW_DATA_BYTES
+        ):
+            editor = RawBytesEditBox(
+                parent
+            )
+
+            self._dlc_raw_binder.bind_raw_editor(
+                editor,
+                index,
+            )
+
+            return editor
+
+        return None
+
+    def setEditorData(
+        self,
+        editor,
+        index,
+    ) -> None:
+        value = index.model().data(
+            index,
+            Qt.ItemDataRole.EditRole,
+        )
+
+        if isinstance(
+            editor,
+            TimeEditBox,
+        ):
+            editor.setText(
+                str(
+                    value
+                    or "0ms"
+                )
+            )
+            return
+
+        if (
+            index.column() == self.COL_DEVICE
+            and isinstance(editor, QComboBox)
+        ):
+            device = value
+            combo_index = editor.findData(device)
+            editor.setCurrentIndex(combo_index)
+            ...
+
+        elif (
+            index.column() == self.COL_CAN_ID
+            and isinstance(editor, QComboBox)
+        ):
+            combo_index = editor.findData(value)
+            editor.setCurrentIndex(combo_index)
+            return
+            ...
+
+        elif (
+            index.column() == self.COL_DIRECTION
+            and isinstance(editor, QComboBox)
+        ):
+            text = str(
+                value
+                or "Rx"
+            )
+
+            combo_index = (
+                editor.findText(
+                    text
+                )
+            )
+
+            editor.setCurrentIndex(
+                combo_index
+                if combo_index >= 0
+                else 0
+            )
+
+            return
+
+        if isinstance(
+            editor,
+            DLCSpinBox,
+        ):
+            editor.set_dlc_value(
+                int(value)
+            )
+
+            return
+
+        if isinstance(
+            editor,
+            RawBytesEditBox,
+        ):
+            editor.setText(
+                str(
+                    value
+                    or ""
+                )
+            )
+
+            obj = (
+                index.internalPointer()
+            )
+
+            if isinstance(
+                obj,
+                CANLogPlay,
+            ):
+                self._dlc_raw_binder.normalize_raw_editor_for_row(
+                    editor,
+                    int(
+                        obj.data_len
+                    ),
+                )
+
+            return
+
+        if isinstance(
+            editor,
+            QLineEdit,
+        ):
+            editor.setText(
+                str(
+                    value
+                    or ""
+                )
+            )
+
+            return
+
+        super().setEditorData(
+            editor,
+            index,
+        )
+
+    def setModelData(
+        self,
+        editor,
+        model,
+        index,
+    ) -> None:
+        if isinstance(
+            editor,
+            TimeEditBox,
+        ):
+            editor._commit()
+
+            value = (
+                editor.text()
+            )
+
+        # elif isinstance(
+        #     editor,
+        #     CanIdEditBox,
+        # ):
+        #     editor._commit()
+        #     value = editor.current_value()
+
+        elif (
+            index.column() == self.COL_DEVICE
+            and isinstance(
+                editor, 
+                QComboBox)
+        ):
+            """20260726 BUG: QComboBox.currentData() can return None"""
+            value = (
+                editor.currentData()
+            )
+            if value is None:
+                return
+
+        elif (
+            index.column() == self.COL_CAN_ID
+            and isinstance(
+                editor, 
+                QComboBox)
+        ):
+            """20260726 BUG: QComboBox.currentData() can return None"""
+            value = (
+                editor.currentData()
+            )
+            if value is None:
+                return
+
+        elif (
+            index.column() == self.COL_DIRECTION
+            and isinstance(
+                editor, 
+                QComboBox)
+        ):
+            value = (
+                editor.currentText()
+            )
+            
+
+        elif isinstance(
+            editor,
+            DLCSpinBox,
+        ):
+            value = (
+                editor.current_dlc_value()
+            )
+
+        elif isinstance(
+            editor,
+            RawBytesEditBox,
+        ):
+            value = (
+                editor.text()
+            )
+
+        elif isinstance(
+            editor,
+            QLineEdit,
+        ):
+            value = (
+                editor.text()
+            )
+
+        else:
+            super().setModelData(
+                editor,
+                model,
+                index,
+            )
+            return
+
+        model.setData(
+            index,
+            value,
+            Qt.ItemDataRole.EditRole,
+        )
+
+
+_HOVER_STYLESHEET = """
+    QTreeView::item:hover {
+        background: rgba(255, 255, 255, 12);
+    }
+"""
 # -----------------------------
 # Main panel
 # -----------------------------
 class CustomSendMessagePanel(QtWidgets.QWidget):
-    send_status_signal = QtCore.Signal(object)
+    # send_status_signal = QtCore.Signal(object)
 
     def __init__(
         self,
         parent: QWidget,
-        candb: CANDBManager,
-        cnt_model: CANConnectManager,                  # CANConnectManager
-        handle: Handle,           # ChannelContext (preferred)
+        vm: ScheduleViewModel
     ):
         super().__init__(parent)
-        self.handle = handle
-        self.candb = candb
-        self.cnt_model = cnt_model
-        self.chl_ctx: Optional[ChannelContext] = self.cnt_model.get_context(self.handle)
-        self.sender: Optional[CANSendManager] = self.cnt_model.get_sender()
-        self.cnt_model.event_on_channels_state_changed.subscribe(self._on_channels_state_changed)
-        event_on_signal_select.subscribe(self._on_event_signal_select)
-        
-        # UI state
-        self._added: Dict[int, CANLogPlay] = {}          # can_id -> last added line
-        #self._status: Dict[int, str] = {}                 # can_id -> status
-        self._last_selected_can_id: Optional[int] = None
-        self._suppress_raw_empty_action = False
-        self._raw_baseline: Optional[bytes] = None
-        self._send_button_mode: str = "SEND_FIRST"         # SEND_FIRST / PAUSE / RESUME
-        self._send_all_button_mode: str = "SEND_ALL"      # SEND_ALL / PAUSE_ALL / RESUME_ALL
-        self._has_any_send_activity: bool = False
+        self.vm = vm
 
-        # Build UI
         self._build_ui()
-        self._wire_events()
-        self.send_status_signal.connect(self._handle_sender_status_on_ui, QtCore.Qt.QueuedConnection)
+
+        # self.spin_dlc.valueChanged.connect(self._on_dlc_changed)
+        # self.spin_cycle.valueChanged.connect(self._refresh_buttons)
+        # self.chk_use_dbc.toggled.connect(self._on_use_dbc_toggled)
+        # self.combo_msg.currentIndexChanged.connect(self._on_message_changed)
+        # self.edit_msg.textChanged.connect(self._on_message_changed)
+        """ NOTE: Flip current editing entry if user selecting one"""
+        self.view.selectionModel().currentChanged.connect(
+            lambda current, previous:
+                setattr(
+                    self.vm,
+                    "editing_entry",
+                    current.internalPointer(),
+                )
+                if (
+                    current.isValid()
+                    and isinstance(
+                        current.internalPointer(),
+                        CANLogPlay,
+                    )
+                )
+                else None
+        )
+        self.btn_send.clicked.connect(
+            lambda:
+                self.vm.pauseMsg(
+                    self.vm.editing_entry.data_model
+                )
+                if self.vm.editing_entry.is_play
+                else
+                self.vm.sendMsgLoop(
+                    self.vm.editing_entry.data_model
+                )
+        )
+
+        self.btn_remove.clicked.connect(
+            lambda:
+                self.vm.removeMsg(
+                    self.vm.editing_entry.data_model
+                )
+        )
+
+        self.btn_remove_all.clicked.connect(
+            lambda:
+                self.vm.clear()
+        )
+
+        self.btn_pause_all.clicked.connect(
+            lambda:
+                [
+                    self.vm.pauseMsg(
+                        play.data_model
+                    )
+                    for play in self.vm.entries
+                    if play.is_play
+                ]
+        )
 
         # Initialize button states
-        self._refresh_buttons()
-        self._update_disconnect_overlay()
+        # self._refresh_buttons()
+        # self._update_disconnect_overlay()
 
     # -----------------------------
     # UI construction
     # -----------------------------
-
     def _build_ui(
         self,
     ):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
-
-        # Top row: Message combo + cycle + dlc + channel
-        top = QtWidgets.QGridLayout()
-        top.setHorizontalSpacing(6)
-        top.setVerticalSpacing(4)
-
-        header_frame = QtWidgets.QFrame(self)
-        header_layout = QtWidgets.QHBoxLayout(header_frame)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(6)
-
-        lbl_msg = QtWidgets.QLabel("ID - Message Name")
-        lbl_msg.setStyleSheet("QLabel { color: #C8CDD3; }")
-        header_layout.addWidget(lbl_msg)
-
-        self.chk_use_dbc = QtWidgets.QCheckBox("Use DBC")
-        f = self.chk_use_dbc.font()
-        f.setPointSize(f.pointSize() - 2)
-        self.chk_use_dbc.setFont(f)
-        self.chk_use_dbc.setStyleSheet("QCheckBox { color: #C8CDD3; }")
-        self.chk_use_dbc.setChecked(True)
-        header_layout.addWidget(self.chk_use_dbc)
-
-        top.addWidget(header_frame, 0, 0, 1, 2)
-
-        lbl_cycle = QtWidgets.QLabel("Cycle ms")
-        lbl_cycle.setStyleSheet("QLabel { color: #C8CDD3; }")
-        top.addWidget(lbl_cycle, 0, 2)
-
-        lbl_dlc = QtWidgets.QLabel("DLC")
-        lbl_dlc.setStyleSheet("QLabel { color: #C8CDD3; }")
-        top.addWidget(lbl_dlc, 0, 3)
-
-        lbl_channel = QtWidgets.QLabel("Channel")
-        lbl_channel.setStyleSheet("QLabel { color: #C8CDD3; }")
-        top.addWidget(lbl_channel, 0, 4)
-
-        self.msg_stack = QtWidgets.QStackedWidget(self)
-
-        self.combo_msg = DBCComboBox(self, self.candb)
-        self.msg_stack.addWidget(self.combo_msg)
-
-        self.edit_msg = CanIdEditBox(self)
-        self.msg_stack.addWidget(self.edit_msg)
-
-        top.addWidget(self.msg_stack, 1, 0, 1, 2)
-
-        # Cycle spin
-        self.spin_cycle = QtWidgets.QSpinBox(self)
-        self.spin_cycle.setRange(1, 10000)
-        self.spin_cycle.setValue(300)
-        self.spin_cycle.setSuffix(" ms")
-        self.spin_cycle.setFixedWidth(110)
-        top.addWidget(self.spin_cycle, 1, 2)
-
-        # DLC spin (CAN FD up to 15)
-        self.spin_dlc = DLCSpinBox(self)
-        # self.spin_dlc.setRange(0, 15)
-        # self.spin_dlc.setValue(15)
-        self.spin_dlc.set_len_value(8)
-        self.spin_dlc.setFixedWidth(70)
-        top.addWidget(self.spin_dlc, 1, 3)
-
-        self.combo_channel = ChannelComboBox(self, connection_model=self.cnt_model)
-        self.combo_channel.setFixedWidth(210)
-        top.addWidget(self.combo_channel, 1, 4)
-
-        top.setColumnStretch(0, 1)
-        top.setColumnStretch(1, 1)
-
-        root.addLayout(top)
 
         btn_row_widget = QtWidgets.QWidget(self)
         btn_row = QtWidgets.QHBoxLayout(btn_row_widget)
@@ -310,952 +1070,591 @@ class CustomSendMessagePanel(QtWidgets.QWidget):
         root.addWidget(btn_row_widget)
 
         # Raw bytes paste input
-        self.raw_row_widget = QtWidgets.QWidget(self)
-        raw_row = QtWidgets.QHBoxLayout(self.raw_row_widget)
-        raw_row.setContentsMargins(0, 0, 0, 0)
-        raw_row.setSpacing(8)
-        self.lbl_raw_bytes = QtWidgets.QLabel("Raw Bytes:", self.raw_row_widget)
-        raw_row.addWidget(self.lbl_raw_bytes)
+        # self.raw_row_widget = QtWidgets.QWidget(self)
+        # raw_row = QtWidgets.QHBoxLayout(self.raw_row_widget)
+        # raw_row.setContentsMargins(0, 0, 0, 0)
+        # raw_row.setSpacing(8)
+        # self.lbl_raw_bytes = QtWidgets.QLabel("Raw Bytes:", self.raw_row_widget)
+        # raw_row.addWidget(self.lbl_raw_bytes)
 
-        self.edit_raw_bytes = RawBytesEditBox(self.raw_row_widget)
-        raw_row.addWidget(self.edit_raw_bytes, 1)
+        # self.edit_raw_bytes = RawBytesEditBox(self.raw_row_widget)
+        # raw_row.addWidget(self.edit_raw_bytes, 1)
 
         # self.lbl_raw_status = QtWidgets.QLabel("")
         # self.lbl_raw_status.setMinimumWidth(180)
         # raw_row.addWidget(self.lbl_raw_status)
 
-        root.addWidget(self.raw_row_widget)
+        #root.addWidget(self.raw_row_widget)
 
         # Data bytes group
-        self.grp_data = QtWidgets.QGroupBox("", self)
-        self.grp_data_layout = QtWidgets.QGridLayout(self.grp_data)
-        self.grp_data_layout.setContentsMargins(0, 0, 0, 0)
-        self.grp_data_layout.setHorizontalSpacing(0)
-        self.grp_data_layout.setVerticalSpacing(0)
+        # self.grp_data = QtWidgets.QGroupBox("", self)
+        # self.grp_data_layout = QtWidgets.QGridLayout(self.grp_data)
+        # self.grp_data_layout.setContentsMargins(0, 0, 0, 0)
+        # self.grp_data_layout.setHorizontalSpacing(0)
+        # self.grp_data_layout.setVerticalSpacing(0)
 
-        root.addWidget(self.grp_data)
+        # root.addWidget(self.grp_data)
 
         # Build initial byte editors based on DLC
-        self._hex_edits: List[HexByteLineEdit] = []
-        self._rebuild_hex_editors(self.spin_dlc.current_len_value())
+        # self._hex_edits: List[HexByteLineEdit] = []
+        # self._rebuild_hex_editors(self.spin_dlc.current_len_value())
 
-        self.tree = TreeSenderTable(self, model=self.candb)
-        root.addWidget(self.tree, 1)
+        self.view = QTreeView(self)
 
-        selected_name = self._channel_name_for_channel_value(getattr(self.handle, "channel_idx", None))
-        if selected_name:
-            idx = self.combo_channel.findText(str(selected_name), Qt.MatchExactly)
-            if idx >= 0:
-                self.combo_channel.setCurrentIndex(idx)
-
-        self._disconnected_overlay = QtWidgets.QFrame(self)
-        self._disconnected_overlay.setObjectName("sendPanelDisconnectOverlay")
-        self._disconnected_overlay.setStyleSheet(
-            "QFrame#sendPanelDisconnectOverlay { background: rgba(20, 20, 20, 110); }"
+        self.model_ = (
+            LogEditViewModel_QtAdapter(
+                self.vm,
+                self,
+            )
         )
 
-        overlay_layout = QtWidgets.QVBoxLayout(self._disconnected_overlay)
-        overlay_layout.setContentsMargins(16, 16, 16, 16)
-        overlay_layout.setAlignment(Qt.AlignCenter)
-
-        self._disconnected_label = QtWidgets.QLabel("Channel disconnected", self._disconnected_overlay)
-        self._disconnected_label.setAlignment(Qt.AlignCenter)
-        self._disconnected_label.setStyleSheet(
-            "QLabel { color: white; font-size: 18px; font-weight: 600; }"
+        self.view.setModel(
+            self.model_
         )
-        overlay_layout.addWidget(self._disconnected_label)
 
-        self._disconnected_overlay.hide()
+        # self.select_model = (
+        #     _TreeLogEditDelegate(
+        #         self.model_,
+        #         self.view,
+        #     )
+        # )
+
+        # self.view.setSelectionModel(
+        #     self.select_model
+        # )
+
+        self._edit_delegate = (
+            _TreeLogEditDelegate(
+                self.view
+            )
+        )
+
+        self.view.setItemDelegate(
+            self._edit_delegate
+        )
+
+        mono = QFont(
+            "Consolas",
+            10,
+        )
+
+        mono.setStyleHint(
+            QFont.StyleHint.Monospace
+        )
+
+        self.view.setFont(
+            mono
+        )
+
+        header = self.view.header()
+
+        header.setStretchLastSection(
+            False
+        )
+
+        header.setSectionResizeMode(
+            QHeaderView.ResizeMode.Interactive
+        )
+
+        header.setFixedHeight(
+            20
+        )
+
+        self.view.setColumnWidth(
+            LogEditViewModel_QtAdapter.COL_DEVICE,
+            110,
+        )
+
+        self.view.setColumnWidth(
+            LogEditViewModel_QtAdapter.COL_STR_DIFF,
+            90,
+        )
+
+        self.view.setColumnWidth(
+            LogEditViewModel_QtAdapter.COL_DIRECTION,
+            90,
+        )
+
+        self.view.setColumnWidth(
+            LogEditViewModel_QtAdapter.COL_CAN_ID_STR,
+            90,
+        )
+
+        self.view.setColumnWidth(
+            LogEditViewModel_QtAdapter.COL_DATA_LEN,
+            70,
+        )
+
+        self.view.setColumnWidth(
+            LogEditViewModel_QtAdapter.COL_RAW_DATA_BYTES,
+            1120,
+        )
+
+        self.view.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+
+        self.view.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+
+        self.view.setUniformRowHeights(
+            True
+        )
+
+        self.view.setAnimated(
+            False
+        )
+
+        self.view.setAutoScroll(
+            True
+        )
+
+        self.view.viewport().setMouseTracking(
+            True
+        )
+
+        self.view.setStyleSheet(
+            self._HOVER_STYLESHEET
+        )
+
+        self.view.viewport().installEventFilter(
+            self
+        )
+
+        layout = QVBoxLayout(
+            self
+        )
+
+        layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
+
+        layout.addWidget(
+            self.view
+        )
+        root.addWidget(self.view, 1)
+
+        self.add_btn = QToolButton(
+            self.view.viewport()
+        )
+
+        self.add_btn.setText("+")
+        self.add_btn.setFixedSize(
+            28,
+            28,
+        )
+
+        self.add_btn.setToolTip(
+            "Add CAN message"
+        )
 
         self.setLayout(root)
 
-    def _wire_events(self):
-        self.spin_dlc.valueChanged.connect(self._on_dlc_changed)
-        self.spin_cycle.valueChanged.connect(self._refresh_buttons)
-        self.chk_use_dbc.toggled.connect(self._on_use_dbc_toggled)
-        self.combo_msg.currentIndexChanged.connect(self._on_message_changed)
-        self.edit_msg.textChanged.connect(self._on_message_changed)
-        self.btn_add.clicked.connect(self._on_add_or_update_clicked)
-        self.btn_remove.clicked.connect(self._on_remove_clicked)
-        self.btn_send.clicked.connect(self._on_send_pause_resume_clicked)
-        self.btn_pause_all.clicked.connect(self._on_pause_all_clicked)
-        self.btn_remove_all.clicked.connect(self._on_remove_all_clicked)
-        self._raw_debouncer = Debouncer(150, self)
-        self.edit_raw_bytes.textChanged.connect(lambda _t: self._raw_debouncer.start())
-        self._raw_debouncer.timeout.connect(self._on_raw_bytes_debounced)
 
-        # If user edits hex fields, mark dirty and possibly switch Add->Update
-        for e in self._hex_edits:
-            e.textEdited.connect(self._refresh_buttons)
+    # def resizeEvent(self, event):
+    #     super().resizeEvent(event)
+    #     if hasattr(self, "_disconnected_overlay"):
+    #         self._disconnected_overlay.setGeometry(self.rect())
+    #         if self._disconnected_overlay.isVisible():
+    #             self._disconnected_overlay.raise_()
 
-        #self.candb.event_on_signal_select.subscribe()
-        self.sender.event_on_send_status_changed.subscribe(self._on_sender_status_changed)
-        self._on_use_dbc_toggled(self.chk_use_dbc.isChecked())
+    # def _on_channels_state_changed(self, *_):
+    #     if hasattr(self, "combo_channel"):
+    #         prev_channel_name = self.combo_channel.currentText().strip()
+    #         self.combo_channel.refresh_channels()
+    #         if prev_channel_name:
+    #             idx = self.combo_channel.findText(prev_channel_name, Qt.MatchExactly)
+    #             if idx >= 0:
+    #                 self.combo_channel.setCurrentIndex(idx)
+    #     self._update_disconnect_overlay()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "_disconnected_overlay"):
-            self._disconnected_overlay.setGeometry(self.rect())
-            if self._disconnected_overlay.isVisible():
-                self._disconnected_overlay.raise_()
+    # def _is_channel_disconnected(self) -> bool:
+    #     if self.handle is None:
+    #         return True
 
-    def _on_channels_state_changed(self, *_):
-        if hasattr(self, "combo_channel"):
-            prev_channel_name = self.combo_channel.currentText().strip()
-            self.combo_channel.refresh_channels()
-            if prev_channel_name:
-                idx = self.combo_channel.findText(prev_channel_name, Qt.MatchExactly)
-                if idx >= 0:
-                    self.combo_channel.setCurrentIndex(idx)
-        self._update_disconnect_overlay()
+    #     checker = getattr(self.cnt_model, "is_channel_disconnected", None)
+    #     if checker is None:
+    #         return False
 
-    def _is_channel_disconnected(self) -> bool:
-        if self.handle is None:
-            return True
+    #     try:
+    #         return bool(checker(self.handle))
+    #     except TypeError:
+    #         return bool(checker())
 
-        checker = getattr(self.cnt_model, "is_channel_disconnected", None)
-        if checker is None:
-            return False
+    # def _update_disconnect_overlay(self):
+    #     if not hasattr(self, "_disconnected_overlay"):
+    #         return
+    #     disconnected = self._is_channel_disconnected()
+    #     if disconnected:
+    #         self._disconnected_overlay.setGeometry(self.rect())
+    #         self._disconnected_overlay.show()
+    #         self._disconnected_overlay.raise_()
+    #     else:
+    #         self._disconnected_overlay.hide()
 
-        try:
-            return bool(checker(self.handle))
-        except TypeError:
-            return bool(checker())
+    # def _on_use_dbc_toggled(self, checked: bool):
+    #     self.spin_dlc.setEnabled(not checked)
+    #     self.raw_row_widget.setVisible(not checked)
+    #     self.grp_data.setVisible(not checked)
+    #     self.tree.set_allow_edit_raw_data(not checked)
+    #     self.tree.set_message_name_visible(checked)
+    #     if checked:
+    #         self.msg_stack.setCurrentWidget(self.combo_msg)
+    #         if self.combo_msg.current_value() is None and self.combo_msg.count() > 0:
+    #             self.combo_msg.setCurrentIndex(0)
+    #     else:
+    #         self.msg_stack.setCurrentWidget(self.edit_msg)
+    #         # if not self._is_syncing_event:
+    #         #     self.spin_dlc.set_len_value(8)
+    #         #     self._raw_baseline = None
+    #         #     self._rebuild_hex_editors(8)
+    #         #     self._set_hex_data(bytes([0] * 8), default_mask=[True] * 8)
+    #     self._on_message_changed("")
 
-    def _update_disconnect_overlay(self):
-        if not hasattr(self, "_disconnected_overlay"):
-            return
-        disconnected = self._is_channel_disconnected()
-        if disconnected:
-            self._disconnected_overlay.setGeometry(self.rect())
-            self._disconnected_overlay.show()
-            self._disconnected_overlay.raise_()
-        else:
-            self._disconnected_overlay.hide()
-
-    def _on_use_dbc_toggled(self, checked: bool):
-        self.spin_dlc.setEnabled(not checked)
-        self.raw_row_widget.setVisible(not checked)
-        self.grp_data.setVisible(not checked)
-        self.tree.set_allow_edit_raw_data(not checked)
-        self.tree.set_message_name_visible(checked)
-        if checked:
-            self.msg_stack.setCurrentWidget(self.combo_msg)
-            if self.combo_msg.current_value() is None and self.combo_msg.count() > 0:
-                self.combo_msg.setCurrentIndex(0)
-        else:
-            self.msg_stack.setCurrentWidget(self.edit_msg)
-            # if not self._is_syncing_event:
-            #     self.spin_dlc.set_len_value(8)
-            #     self._raw_baseline = None
-            #     self._rebuild_hex_editors(8)
-            #     self._set_hex_data(bytes([0] * 8), default_mask=[True] * 8)
-        self._on_message_changed("")
-
-    def _on_event_signal_select(self, selection: SignalFilter):
-        self._refresh_buttons()
+    # def _on_event_signal_select(self, selection: SignalFilter):
+    #     self._refresh_buttons()
 
     # -----------------------------
     # Sender events integration
     # -----------------------------
-    def _on_sender_status_changed(self, payload):
-        self.send_status_signal.emit(payload)
+    # def _on_sender_status_changed(self, payload):
+    #     self.send_status_signal.emit(payload)
 
-    def _log_added_state(self, source: str):
-        if not self._added:
-            LOG.debug("[SEND_PANEL][_added] %s | count=0 | entries=[]", source)
-            return
+    # def _log_added_state(self, source: str):
+    #     if not self._added:
+    #         LOG.debug("[SEND_PANEL][_added] %s | count=0 | entries=[]", source)
+    #         return
 
-        entries = []
-        for can_id, entry in sorted(self._added.items(), key=lambda it: int(it[0])):
-            state = getattr(entry, "send_state", SendState.NONE)
-            state_name = state.name if hasattr(state, "name") else str(state)
-            entries.append(f"0x{int(can_id):X}:{state_name}")
+    #     entries = []
+    #     for can_id, entry in sorted(self._added.items(), key=lambda it: int(it[0])):
+    #         state = getattr(entry, "send_state", SendState.NONE)
+    #         state_name = state.name if hasattr(state, "name") else str(state)
+    #         entries.append(f"0x{int(can_id):X}:{state_name}")
 
-        LOG.debug(
-            "[SEND_PANEL][_added] %s | count=%d | entries=[%s]",
-            source,
-            len(self._added),
-            ", ".join(entries),
-        )
+    #     LOG.debug(
+    #         "[SEND_PANEL][_added] %s | count=%d | entries=[%s]",
+    #         source,
+    #         len(self._added),
+    #         ", ".join(entries),
+    #     )
 
-    @QtCore.Slot(object)
-    def _handle_sender_status_on_ui(self, payload):
-        LOG.debug(f"[SEND_PANEL][STATUS] payload={payload}")
-
-        status, channel_id, can_id = payload
-        self._log_added_state(f"before status={status} can_id={can_id}")
-        own_channel_id = self._channel_id_from_handle()
-        if own_channel_id is None:
-            return
-        if channel_id is not None and int(channel_id) != own_channel_id:
-            return
-
-        selected_can_id = self._current_selected_can_id()
-        selected_can_id = int(selected_can_id) if selected_can_id is not None else None
-
-        if can_id is None:
-            if status == "PAUSED_ALL":
-                self.btn_pause_all.setText("Resume all")
-                for entry in self._added.values():
-                    if entry.send_state == SendState.SENDING:
-                        entry.send_state = SendState.PAUSED
-                self.tree.set_data(self.entries)
-                LOG.debug("[SEND_PANEL][STATUS] PAUSED_ALL -> btn_pause_all=Resume all")
-            elif status == "RESUMED_ALL":
-                self._has_any_send_activity = True
-                self.btn_pause_all.setText("Pause all")
-                for entry in self._added.values():
-                    if entry.send_state in {SendState.PAUSED, SendState.NONE}:
-                        entry.send_state = SendState.SENDING
-                self.tree.set_data(self.entries)
-                LOG.debug("[SEND_PANEL][STATUS] RESUMED_ALL -> btn_pause_all=Pause all")
-            elif status == "CHANNEL_UNREGISTERED":
-                changed = False
-                channel_match = int(channel_id) if channel_id is not None else None
-                for entry in self._added.values():
-                    try:
-                        if channel_match is not None and int(getattr(entry, "channel", -1)) != channel_match:
-                            continue
-                    except Exception:
-                        continue
-                    if entry.send_state != SendState.DISCONNETED:
-                        entry.send_state = SendState.DISCONNETED
-                        changed = True
-                if changed:
-                    self.tree.set_data(self.entries)
-                LOG.debug("[SEND_PANEL][STATUS] CHANNEL_UNREGISTERED -> mark entries DISCONNETED")
-            elif status == "CHANNEL_REGISTERED":
-                changed = False
-                channel_match = int(channel_id) if channel_id is not None else None
-                for entry in self._added.values():
-                    try:
-                        if channel_match is not None and int(getattr(entry, "channel", -1)) != channel_match:
-                            continue
-                    except Exception:
-                        continue
-                    if entry.send_state == SendState.DISCONNETED:
-                        entry.send_state = SendState.NONE
-                        changed = True
-                if changed:
-                    self.tree.set_data(self.entries)
-                LOG.debug("[SEND_PANEL][STATUS] CHANNEL_REGISTERED -> restore entries NONE")
-            elif status in {"CLEAR", "CLEARED", "REMOVED_ALL"}:
-                if self._added:
-                    self._added.clear()
-                    self.tree.set_data(self.entries)
-                self._send_button_mode = "SEND_FIRST"
-                self.btn_send.setText("Send")
-                LOG.debug("[SEND_PANEL][STATUS] %s -> cleared all entries", status)
-            self._log_added_state(f"after status={status} can_id=None")
-            self._sync_pause_all_button_state()
-            self._refresh_buttons()
-            return
-
-        can_id = int(can_id)
-        LOG.debug(
-            f"[SEND_PANEL][STATUS] status={status}, can_id={can_id}, "
-            f"selected_can_id={selected_can_id}, mode_before={self._send_button_mode}"
-        )
-
-        if status in {"ADDED", "UPDATED"}:
-            if can_id in self._added:
-                self._added[can_id].send_state = SendState.NONE
-                self.tree.set_data(self.entries)
-
-            if selected_can_id == can_id:
-                self._send_button_mode = "SEND_FIRST"
-                self.btn_send.setText("Send")
-            LOG.debug("[SEND_PANEL][STATUS] -> mode=SEND_FIRST, btn_send=Send")
-
-        elif status == "RESUMED":
-            self._has_any_send_activity = True
-            if can_id in self._added:
-                self._added[can_id].send_state = SendState.SENDING
-                self.tree.set_data(self.entries)
-            if selected_can_id == can_id:
-                self._send_button_mode = "PAUSE"
-                self.btn_send.setText("Pause")
-            LOG.debug("[SEND_PANEL][STATUS] -> mode=PAUSE, btn_send=Pause")
-
-        elif status == "PAUSED":
-            if can_id in self._added:
-                self._added[can_id].send_state = SendState.PAUSED
-                self.tree.set_data(self.entries)
-
-            if selected_can_id == can_id:
-                self._send_button_mode = "RESUME"
-                self.btn_send.setText("Resume")
-            LOG.debug("[SEND_PANEL][STATUS] -> mode=RESUME, btn_send=Resume")
-
-        elif status == "REMOVED":
-            if can_id in self._added:
-                self._added[can_id].send_state = SendState.NONE
-            self._added.pop(can_id, None)
-            # self._status.pop(can_id, None)
-            self.tree.set_data(self.entries)
-            self._send_button_mode = "SEND_FIRST"
-            self.btn_send.setText("Send")
-            LOG.debug("[SEND_PANEL][STATUS] -> mode=SEND_FIRST, btn_send=Send, removed entry")
-
-        else:
-            LOG.debug(f"[SEND_PANEL][STATUS] Unhandled status={status}")
-
-        self._log_added_state(f"after status={status} can_id={can_id}")
-        LOG.debug(f"[SEND_PANEL][STATUS] mode_after={self._send_button_mode}")
-        self._sync_pause_all_button_state()
-        self._refresh_buttons()
 
     # -----------------------------
     # Message list / Combo integration
     # -----------------------------
-    def _rebuild_hex_editors(self, data_len: int, data: Optional[bytes] = None, baseline: Optional[bytes] = None):
-        # Clear layout items
-        while self.grp_data_layout.count():
-            item = self.grp_data_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+    # def _rebuild_hex_editors(self, data_len: int, data: Optional[bytes] = None, baseline: Optional[bytes] = None):
+    #     # Clear layout items
+    #     while self.grp_data_layout.count():
+    #         item = self.grp_data_layout.takeAt(0)
+    #         w = item.widget()
+    #         if w is not None:
+    #             w.deleteLater()
 
-        self._hex_edits = []
-        #self.grp_data.setTitle(f"Data Bytes ({data_len})")
-        cols = 16
-        rows = max(1, math.ceil(data_len / cols))
+    #     self._hex_edits = []
+    #     #self.grp_data.setTitle(f"Data Bytes ({data_len})")
+    #     cols = 16
+    #     rows = max(1, math.ceil(data_len / cols))
 
-        for i in range(data_len):
-            e = HexByteLineEdit(self.grp_data)
-            if baseline is not None and i < len(baseline):
-                e.set_baseline(baseline[i])
-            else:
-                e.clear_baseline()
+    #     for i in range(data_len):
+    #         e = HexByteLineEdit(self.grp_data)
+    #         if baseline is not None and i < len(baseline):
+    #             e.set_baseline(baseline[i])
+    #         else:
+    #             e.clear_baseline()
 
-            if data is not None and i < len(data):
-                e.set_value(data[i], is_default=True)
-            else:
-                e.set_value(0, is_default=True)
-            r = i // cols
-            c = i % cols
-            self.grp_data_layout.addWidget(e, r, c)
-            self._hex_edits.append(e)
+    #         if data is not None and i < len(data):
+    #             e.set_value(data[i], is_default=True)
+    #         else:
+    #             e.set_value(0, is_default=True)
+    #         r = i // cols
+    #         c = i % cols
+    #         self.grp_data_layout.addWidget(e, r, c)
+    #         self._hex_edits.append(e)
 
-        # add spacers so grid looks clean
-        for r in range(rows):
-            self.grp_data_layout.setRowStretch(r, 0)
-        self.grp_data_layout.setColumnStretch(cols, 1)
+    #     # add spacers so grid looks clean
+    #     for r in range(rows):
+    #         self.grp_data_layout.setRowStretch(r, 0)
+    #     self.grp_data_layout.setColumnStretch(cols, 1)
 
-        # hook edit events
-        for e in self._hex_edits:
-            e.textEdited.connect(self._refresh_buttons)
+    #     # hook edit events
+    #     for e in self._hex_edits:
+    #         e.textEdited.connect(self._refresh_buttons)
 
-    def _set_hex_data(self, data: bytes, default_mask: Optional[List[bool]] = None, baseline: Optional[bytes] = None):
-        for i, e in enumerate(self._hex_edits):
-            if baseline is not None and i < len(baseline):
-                e.set_baseline(baseline[i])
-            elif baseline is not None:
-                e.clear_baseline()
-            v = data[i] if i < len(data) else 0
-            is_default = False
-            if default_mask is not None and i < len(default_mask):
-                is_default = default_mask[i]
-            e.set_value(v, is_default=is_default)
+    # def _set_hex_data(self, data: bytes, default_mask: Optional[List[bool]] = None, baseline: Optional[bytes] = None):
+    #     for i, e in enumerate(self._hex_edits):
+    #         if baseline is not None and i < len(baseline):
+    #             e.set_baseline(baseline[i])
+    #         elif baseline is not None:
+    #             e.clear_baseline()
+    #         v = data[i] if i < len(data) else 0
+    #         is_default = False
+    #         if default_mask is not None and i < len(default_mask):
+    #             is_default = default_mask[i]
+    #         e.set_value(v, is_default=is_default)
     # -----------------------------
     # Event handlers
     # -----------------------------
 
-    def _get_default_mask(self) -> List[bool]:
-        """
-        True  = byte is still default (not user-edited)
-        False = user modified
-        """
-        mask = []
-        for e in self._hex_edits:
-            mask.append(e._is_default_value)
-        return mask
-
-    def _on_dlc_changed(self, dlc: int):
-        prev_data = hex_raw_to_bytes(self.get_hex_raw_string())
-        prev_default_mask = self._get_default_mask()
-        data_len = self.candb.get_length_from_dlc(dlc)
-        # Trim or extend data safely
-        new_data = prev_data[:data_len]
-        new_mask = prev_default_mask[:data_len]
-
-        # Extend with DEFAULT zeros if DLC increased
-        while len(new_data) < data_len:
-            new_data += b"\x00"
-            new_mask.append(True)  # <-- KEY LINE
-
-        baseline = self._raw_baseline
-        if baseline is not None:
-            baseline = baseline[:data_len]
-
-        self._rebuild_hex_editors(
-            data_len,
-            data=new_data,
-            baseline=baseline
-        )
-
-        # Restore default/user intent state explicitly
-        for i, e in enumerate(self._hex_edits):
-            e._is_default_value = new_mask[i]
-            e._apply_color()
-        self._refresh_buttons()
-
-    def _on_message_changed(self, _t: str):
-        cid = self._current_selected_can_id()
-        if cid is None:
-            self._refresh_buttons()
-            return
-
-        cid = int(cid)
-        existing = self._added.get(cid)
-        if existing is not None:
-            try:
-                cycle_ms = max(1, int(float(existing.timediff or 0.0) * 1000.0))
-                self.spin_cycle.setValue(cycle_ms)
-            except Exception:
-                pass
-
-            if hasattr(self, "combo_channel"):
-                selected_name = self._channel_name_for_channel_value(getattr(existing, "channel", None))
-                if selected_name:
-                    idx = self.combo_channel.findText(str(selected_name), Qt.MatchExactly)
-                    if idx >= 0:
-                        self.combo_channel.setCurrentIndex(idx)
-
-            data_len = max(0, int(existing.data_len or 0))
-            self.spin_dlc.set_len_value(data_len)
-            payload = hex_raw_to_bytes(str(existing.raw_data or ""))
-            payload = payload[:data_len].ljust(data_len, b"\x00")
-            self._rebuild_hex_editors(data_len)
-            self._set_hex_data(payload, default_mask=[True] * data_len)
-            self._refresh_buttons()
-            return
-
-        if self.chk_use_dbc.isChecked():
-            can_id = self.combo_msg.current_value()
-            if can_id is None and self.combo_msg.count() > 0:
-                self.combo_msg.setCurrentIndex(0)
-                can_id = self.combo_msg.current_value()
-            if can_id is not None:
-                msg = self.candb.get_message(can_id)
-                if msg.cycle_time is not None:
-                    self.spin_cycle.setValue(int(msg.cycle_time))
-                else:
-                    self.spin_cycle.setValue(0)
-                self.spin_dlc.set_len_value(msg.length)
-            self._rebuild_hex_editors(self.spin_dlc.current_len_value())
-            self._set_hex_data(
-                bytes([0] * self.spin_dlc.current_len_value()),
-                default_mask=[True] * self.spin_dlc.current_len_value(),
-            )
-
-        self._refresh_buttons()
-
-    def _on_raw_bytes_debounced(self):
-        data = self.edit_raw_bytes.current_value()
-        if not data:
-            self._raw_baseline = None
-            if not self.chk_use_dbc.isChecked():
-                self.spin_dlc.set_len_value(8)
-                self._rebuild_hex_editors(8)
-                self._set_hex_data(bytes([0] * 8), default_mask=[True] * 8)
-                self._refresh_buttons()
-            return
-        self.spin_dlc.set_len_value(len(data))
-        padded = data.ljust(len(data), b"\x00")
-        self._raw_baseline = padded
-        self._rebuild_hex_editors(len(data), data=padded, baseline=padded)
-        self._refresh_buttons()
-
-    def get_hex_raw_string(self) -> str:
-        """
-        Read current values from self._hex_edits (List[HexByteLineEdit])
-        and return CANLogLine-compatible raw hex string.
-
-        Example:
-            "00 1A FF"
-        """
-        parts: list[str] = []
-
-        for e in self._hex_edits:
-            v = e.value()          # HexByteLineEdit.value() -> Optional[int]
-            if v is None:
-                parts.append("00")
-            else:
-                parts.append(f"{int(v):02X}")
-
-        return " ".join(parts)
-
-    @property
-    def entries(self) -> List[CANLogPlay]:
-        return list(self._added.values())
-
-    def _on_add_or_update_clicked(self):
-        LOG.debug("_on_add_or_update_clicked")
-        self._log_added_state("button Add/Update pressed (before request)")
-        cid = self._current_selected_can_id()
-        if cid is None:
-            return
-        cid = int(cid)
-        entry = self._build_line_from_ui(cid)
-        if cid in self._added:
-            entry.send_state = getattr(self._added[cid], "send_state", SendState.NONE)
-        else:
-            entry.send_state = SendState.NONE
-
-        periodic_s = float(entry.timediff or 0.0)
-        if periodic_s <= 0:
-            LOG.warning("[SEND_PANEL][ADD] invalid periodic for can_id=%s", cid)
-            return
-
-        self._added[cid] = entry
-        self.tree.set_data(self.entries)
-
-        self.sender.send_msg_loop_from_line(entry, initial_periodic=periodic_s)
-
-        # Keep current values as clean baseline after Add/Update.
-        # This ensures Update is disabled until user changes something again.
-        self._raw_baseline = None
-        self.edit_raw_bytes.setText("")
-
-        current_data = hex_raw_to_bytes(entry.raw_data or "")
-        self._set_hex_data(
-            current_data,
-            default_mask=[True] * self.spin_dlc.current_len_value(),
-        )
-        self._log_added_state("button Add/Update pressed (after request)")
-        self._refresh_buttons()
-
-    def _on_remove_clicked(self):
-        LOG.debug("_on_remove_clicked")
-        self._log_added_state("button Remove pressed (before request)")
-        cid = self._current_selected_can_id()
-        if cid is None:
-            return
-        cid = int(cid)
-        channel_id = self._channel_id_from_handle()
-        if channel_id is None:
-            LOG.warning("[SEND_PANEL][REMOVE] invalid handle for channel_id, can_id=%s", cid)
-            return
-        LOG.debug(f"[SEND_PANEL][REMOVE] request remove for can_id={cid}")
-        self.sender.remove_msg(channel_id, cid)
-        self._log_added_state("button Remove pressed (after request, waiting status)")
-
-    def _on_send_pause_resume_clicked(self):
-        LOG.debug("_on_send_pause_resume_clicked")
-        cid = self._current_selected_can_id()
-        if cid is None:
-            return
-        cid = int(cid)
-        channel_id = self._channel_id_from_handle()
-        if channel_id is None:
-            LOG.warning("[SEND_PANEL][SEND] invalid handle for channel_id, can_id=%s", cid)
-            return
-        if cid not in self._added:
-            return
-        entry = self._added[cid]
-        if getattr(entry, "send_state", SendState.NONE) == SendState.DISCONNETED:
-            LOG.debug("[SEND_PANEL][SEND] blocked action for disconnected entry can_id=%s", cid)
-            return
-
-        cycle_ms = float(self.spin_cycle.value())
-        periodic_s = cycle_ms / 1000.0
-
-        # Decide action based on current button mode
-        if self._send_button_mode == "SEND_FIRST":
-            if cycle_ms < 1:
-                self.sender.send_once_from_entry(entry)
-                return
-            self.sender.resume(channel_id, cid)
-            return
-
-        if self._send_button_mode == "PAUSE":
-            self.sender.stop(channel_id, cid)
-            return
-
-        if self._send_button_mode == "RESUME":
-            self.sender.resume(channel_id, cid)
-            return
-
-    def _on_pause_all_clicked(self):
-        LOG.debug("_on_pause_all_clicked")
-        channel_id = self._channel_id_from_handle()
-        if channel_id is None:
-            LOG.warning("[SEND_PANEL][ALL] invalid handle for channel_id")
-            return
-        if self._send_all_button_mode == "SEND_ALL":
-            self.sender.resume(channel_id, None)
-            return
-
-        if self._send_all_button_mode == "PAUSE_ALL":
-            self.sender.stop(channel_id, None)
-            return
-
-        self.sender.resume(channel_id, None)
-
-    def _on_remove_all_clicked(self):
-        LOG.debug("_on_remove_all_clicked")
-        if len(self._added) < 2:
-            return
-
-        channel_id = self._channel_id_from_handle()
-        if channel_id is None:
-            LOG.warning("[SEND_PANEL][CLEAR] invalid handle for channel_id")
-            return
-
-        clear_fn = getattr(self.sender, "clear", None)
-        if callable(clear_fn):
-            try:
-                clear_fn(channel_id)
-                return
-            except TypeError:
-                clear_fn()
-                return
-
-        clear_all_fn = getattr(self.sender, "clear_all", None)
-        if callable(clear_all_fn):
-            clear_all_fn(channel_id)
-            return
-
-        remove_all_fn = getattr(self.sender, "remove_all", None)
-        if callable(remove_all_fn):
-            remove_all_fn(channel_id)
-            return
-
-        self.sender.remove_msg(channel_id, None)
-
-    def _sync_pause_all_button_state(self):
-        has_entries = bool(self._added)
-        sendable_entries = [
-            entry
-            for entry in self._added.values()
-            if getattr(entry, "send_state", SendState.NONE) != SendState.DISCONNETED
-        ]
-        any_sending = any(
-            getattr(entry, "send_state", SendState.NONE) == SendState.SENDING
-            for entry in sendable_entries
-        )
-        any_paused = any(
-            getattr(entry, "send_state", SendState.NONE) == SendState.PAUSED
-            for entry in sendable_entries
-        )
-
-        self.btn_pause_all.setEnabled(bool(sendable_entries))
-        self.btn_remove_all.setEnabled(len(self._added) >= 2)
-        if not has_entries:
-            self._send_all_button_mode = "SEND_ALL"
-            self._has_any_send_activity = False
-            self.btn_pause_all.setText("Send all")
-            return
-
-        if not sendable_entries:
-            self._send_all_button_mode = "SEND_ALL"
-            self.btn_pause_all.setText("Send all")
-            return
-
-        if any_sending:
-            self._send_all_button_mode = "PAUSE_ALL"
-            self.btn_pause_all.setText("Pause all")
-            return
-
-        if any_paused:
-            self._send_all_button_mode = "RESUME_ALL"
-            self.btn_pause_all.setText("Resume all")
-            return
-
-        self._send_all_button_mode = "SEND_ALL"
-        self.btn_pause_all.setText("Send all")
-
-    # -----------------------------
-    # State / dirty / buttons
-    # -----------------------------
-    def _current_selected_can_id(self) -> Optional[int]:
-        if self.chk_use_dbc.isChecked():
-            return self.combo_msg.current_value()
-        return self.edit_msg.current_value()
-
-    def _channel_id_from_handle(self) -> Optional[int]:
-        combo = getattr(self, "combo_channel", None)
-        if combo is not None:
-            selected_name = combo.currentText().strip()
-            if selected_name:
-                for handle in self.cnt_model.acquired_channels.keys():
-                    try:
-                        info = self.cnt_model.get_channel_info(handle)
-                        name = str(getattr(info, "name", "") or "").strip()
-                        if name == selected_name:
-                            return int(handle.channel_idx)
-                    except Exception:
-                        continue
-        if self.handle is None:
-            return None
-        return int(self.handle.channel_idx)
-
-    def _channel_name_for_channel_value(self, channel_value) -> Optional[str]:
-        if channel_value is None:
-            return None
-
-        target_raw = str(channel_value).strip()
-        if not target_raw:
-            return None
-
-        target_int = None
-        try:
-            target_int = int(target_raw)
-        except Exception:
-            target_int = None
-
-        for handle in self.cnt_model.acquired_channels.keys():
-            try:
-                info = self.cnt_model.get_channel_info(handle)
-                name = str(getattr(info, "name", "") or "").strip()
-                if name and name == target_raw:
-                    return name
-
-                if target_int is not None:
-                    if int(getattr(handle, "channel_idx", -1)) == target_int:
-                        return name or None
-                    if int(getattr(handle, "native_handle", -1)) == target_int:
-                        return name or None
-            except Exception:
-                continue
-
-        return None
-
-    def _refresh_buttons(self):
-        cid = self._current_selected_can_id()
-        if cid is None:
-            self.btn_add.setText("Add")
-            self.btn_add.setEnabled(False)
-            self.btn_remove.setEnabled(False)
-            self.btn_send.setEnabled(False)
-            return
-
-        cid = int(cid)
-        existing = self._added.get(cid)
-
-        if existing is None:
-            self.btn_add.setText("Add")
-            self.btn_add.setEnabled(True)
-            self.btn_remove.setEnabled(False)
-            self.btn_send.setEnabled(False)
-            self._send_button_mode = "SEND_FIRST"
-            self.btn_send.setText("Send")
-            return
-
-        self.btn_add.setText("Update")
-        current_line = self._build_line_from_ui(cid)
-        is_dirty = self._line_differs(current_line, existing)
-        self.btn_add.setEnabled(is_dirty)
-        self.btn_remove.setEnabled(True)
-        state = getattr(existing, "send_state", SendState.NONE)
-        self.btn_send.setEnabled(state != SendState.DISCONNETED)
-        if state == SendState.SENDING:
-            self._send_button_mode = "PAUSE"
-            self.btn_send.setText("Pause")
-        elif state == SendState.PAUSED:
-            self._send_button_mode = "RESUME"
-            self.btn_send.setText("Resume")
-        else:
-            self._send_button_mode = "SEND_FIRST"
-            self.btn_send.setText("Send")
-
-    def _line_differs(self, a: CANLogPlay, b: CANLogPlay) -> bool:
-        return (
-            float(a.timediff or 0.0) != float(b.timediff or 0.0)
-            or str(a.channel or "") != str(b.channel or "")
-            or int(a.data_len or 0) != int(b.data_len or 0)
-            or str(a.raw_data or "").strip().upper() != str(b.raw_data or "").strip().upper()
-        )
-
-    def _build_line_from_ui(self, can_id: int) -> CANLogPlay:
-        cycle_ms = float(self.spin_cycle.value())
-        channel_name = self.combo_channel.currentText().strip()
-        # dlc = int(self.spin_dlc.value())
-        # data_len = self.candb.get_length_from_dlc(dlc)
-        return CANLogPlay(
-            _timediff=cycle_ms / 1000,
-            channel=channel_name,
-            can_id=can_id,
-            direction="Tx",
-            data_len=self.spin_dlc.current_len_value(),
-            raw_data=self.get_hex_raw_string(),
-        )
-
-    def _load_line_to_ui(self, line: CANLogLine):
-        cycle_ms = int((line.timediff or 0.0) * 1000)
-        self.spin_cycle.setValue(cycle_ms)
-        data_len = int(line.data_len or 0)
-        dlc = self.candb.get_dlc_from_length(data_len)
-        self.spin_dlc.setValue(dlc)
-        self._rebuild_hex_editors(self.candb.get_length_from_dlc(dlc))
-        data = hex_raw_to_bytes(line.raw_data or "")
-        self._set_hex_data(data, default_mask=[True] * len(data))
-
-def main():
-    setup_logger(env="PRD", backup_count=30)
-
-    app = QApplication(sys.argv)
-
-    win = QWidget()
-    win.setWindowTitle("CAN Test Panel (PySide6)")
-    win.resize(500, 500)
-
-    layout = QVBoxLayout(win)
-
-    # ---------------- Sample log lines ----------------
-    test_lines = [
-        "2132132 CANFD   1 Rx        417                                   1 0 8 8  14 3C 40 00 00 00 09 BC",
-        "2132133 CANFD   1 Rx        48E                                   1 0 8 8  40 92 49 60 80 4D 00 00",
-        "2132132 CANFD   1 Rx        100                                   1 0 8 8  14 3C 40 00 00 00 10 BC",
-        "2132135 CANFD   1 Rx         84                                   1 0 8 8  3F 85 3E 76 81 02 2F 3F",
-        "2132137 CANFD   1 Rx        41E                                   1 0 8 8  40 92 14 60 80 4D 00 00",
-        "2132138 CANFD   1 Rx        38E                                   1 0 8 8  40 80 49 60 80 4D 00 00",
-        "2132139 CANFD   1 Rx        18E                                   1 0 8 8  40 92 49 10 80 4D 00 00",
-        "2132135 CANFD   1 Rx         85                                   1 0 8 8  3F 85 3E 76 81 02 2F 3F",
-        "2132137 CANFD   1 Rx         86                                   1 0 8 8  40 92 14 60 80 4D 00 00",
-        "2132138 CANFD   1 Rx         87                                   1 0 8 8  40 80 49 60 80 4D 00 00",
-        "2132139 CANFD   1 Rx         88                                   1 0 8 8  40 92 49 10 80 4D 00 00",
-    ]
-
-   # ---------------- Test data ----------------
-    parser = LogParser()
-    parsed_lines = [parser._various_parse_line_test(l, i) for i, l in enumerate(test_lines)]
-    model = CANDBManager()
-    model.load_database(
-        "/home/gnar911/Desktop/20260122 APP WEBSITE - CAN ANALYZER 3.0 CBCM TOOL APP ARC/CAN_Analyzer_MVVM/Database/EEA10_CANFD_R00c_withADAS_Main.dbc")
-
-    # ---------------- Connection Manager ----------------
-    m = CANConnectManager(CANDeviceType.SOCKETCAN)
-    m.start_scan()
-
-    state = {
-        "handle": None,
-        "monitor": None,
-        "monitors": {},
-        "send_idx": 0,
-        "periodic_idx": 0,
-    }
-
-    # ---------------- Button Actions ----------------
-
-    def test_acquire_chnl():
-        if not m.available_channels:
-            QMessageBox.warning(win, "Warning", "No available channels")
-            return
-
-        handle, channel = next(iter(m.available_channels.items()))
-
-        if m.acquire(handle):
-            state["handle"] = handle
-            print(f"Acquired: {channel.name}")
-
-            # Create monitor panel
-            monitor = CustomSendMessagePanel(
-                parent=win,
-                candb=model,
-                cnt_model=m,
-                handle=handle
-            )
-
-            layout.addWidget(monitor)
-            state["monitor"] = monitor
-            state["monitors"][handle] = monitor
-        else:
-            QMessageBox.warning(win, "Warning", "Acquire failed")
-
-    def test_release_chnl():
-        handle = state["handle"]
-        if handle is None:
-            # If no active handle in state, release any remaining acquired channel.
-            acquired = list(m.acquired_channels.keys())
-            if not acquired:
-                return
-            handle = acquired[0]
-
-        m.release(handle)
-        print("Released channel")
-
-        if state["handle"] == handle:
-            state["handle"] = None
-
-        # Destroy monitor panel safely (for the released handle)
-        monitor = state.get("monitors", {}).pop(handle, None)
-        if monitor:
-            monitor.setParent(None)
-            monitor.deleteLater()
-            if state.get("monitor") is monitor:
-                state["monitor"] = None
-
-    def test_send_once():
-        if state["handle"] is None:
-            print("No channel acquired")
-            return
-
-        sender = m.get_sender()
-        if not sender:
-            return
-
-        sender.send_once_from_entry(parsed_lines[0])
-        print("Send once")
-
-    PERIODIC_SEQ_MS = [10, 9, 8, 7, 6, 5]
-
-    def test_send_loop():
-        if state["handle"] is None:
-            print("No channel acquired")
-            return
-
-        sender = m.get_sender()
-        if not sender:
-            return
-
-        # ---- rotate log line ----
-        line_idx = state["send_idx"] % len(parsed_lines)
-        state["send_idx"] += 1
-
-
-        per_idx = state["periodic_idx"] % len(PERIODIC_SEQ_MS)
-        state["periodic_idx"] += 1
-
-        periodic_ms = PERIODIC_SEQ_MS[per_idx]
-        periodic_sec = periodic_ms / 1000.0
-
-        print(f"Send loop started | periodic={periodic_ms} ms")
-
-        sender.send_msg_loop_from_line(
-            parsed_lines[line_idx],
-            periodic_sec
-        )
-
-        print(
-            f"Send loop started | "
-            f"line={line_idx}, "
-            f"periodic={periodic_ms} ms"
-        )
-
-    # ---------------- UI Buttons ----------------
-
-    btn_acquire = QPushButton("Acquire Channel")
-    btn_release = QPushButton("Release Channel")
-    # btn_send_once = QPushButton("Send Once")
-    # btn_send_loop = QPushButton("Send Loop")
-
-    btn_acquire.clicked.connect(test_acquire_chnl)
-    btn_release.clicked.connect(test_release_chnl)
-    # btn_send_once.clicked.connect(test_send_once)
-    # btn_send_loop.clicked.connect(test_send_loop)
-
-    layout.addWidget(btn_acquire)
-    layout.addWidget(btn_release)
-    # layout.addWidget(btn_send_once)
-    # layout.addWidget(btn_send_loop)
-    layout.addStretch(1)
-
-    win.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+    # def _get_default_mask(self) -> List[bool]:
+    #     """
+    #     True  = byte is still default (not user-edited)
+    #     False = user modified
+    #     """
+    #     mask = []
+    #     for e in self._hex_edits:
+    #         mask.append(e._is_default_value)
+    #     return mask
+
+    # def _on_dlc_changed(self, dlc: int):
+    #     prev_data = hex_raw_to_bytes(self.get_hex_raw_string())
+    #     prev_default_mask = self._get_default_mask()
+    #     data_len = self.candb.get_length_from_dlc(dlc)
+    #     # Trim or extend data safely
+    #     new_data = prev_data[:data_len]
+    #     new_mask = prev_default_mask[:data_len]
+
+    #     # Extend with DEFAULT zeros if DLC increased
+    #     while len(new_data) < data_len:
+    #         new_data += b"\x00"
+    #         new_mask.append(True)  # <-- KEY LINE
+
+    #     baseline = self._raw_baseline
+    #     if baseline is not None:
+    #         baseline = baseline[:data_len]
+
+    #     self._rebuild_hex_editors(
+    #         data_len,
+    #         data=new_data,
+    #         baseline=baseline
+    #     )
+
+    #     # Restore default/user intent state explicitly
+    #     for i, e in enumerate(self._hex_edits):
+    #         e._is_default_value = new_mask[i]
+    #         e._apply_color()
+    #     self._refresh_buttons()
+
+    # def _on_message_changed(self, _t: str):
+    #     cid = self._current_selected_can_id()
+    #     if cid is None:
+    #         self._refresh_buttons()
+    #         return
+
+    #     cid = int(cid)
+    #     existing = self._added.get(cid)
+    #     if existing is not None:
+    #         try:
+    #             cycle_ms = max(1, int(float(existing.timediff or 0.0) * 1000.0))
+    #             self.spin_cycle.setValue(cycle_ms)
+    #         except Exception:
+    #             pass
+
+    #         if hasattr(self, "combo_channel"):
+    #             selected_name = self._channel_name_for_channel_value(getattr(existing, "channel", None))
+    #             if selected_name:
+    #                 idx = self.combo_channel.findText(str(selected_name), Qt.MatchExactly)
+    #                 if idx >= 0:
+    #                     self.combo_channel.setCurrentIndex(idx)
+
+    #         data_len = max(0, int(existing.data_len or 0))
+    #         self.spin_dlc.set_len_value(data_len)
+    #         payload = hex_raw_to_bytes(str(existing.raw_data or ""))
+    #         payload = payload[:data_len].ljust(data_len, b"\x00")
+    #         self._rebuild_hex_editors(data_len)
+    #         self._set_hex_data(payload, default_mask=[True] * data_len)
+    #         self._refresh_buttons()
+    #         return
+
+    #     if self.chk_use_dbc.isChecked():
+    #         can_id = self.combo_msg.current_value()
+    #         if can_id is None and self.combo_msg.count() > 0:
+    #             self.combo_msg.setCurrentIndex(0)
+    #             can_id = self.combo_msg.current_value()
+    #         if can_id is not None:
+    #             msg = self.candb.get_message(can_id)
+    #             if msg.cycle_time is not None:
+    #                 self.spin_cycle.setValue(int(msg.cycle_time))
+    #             else:
+    #                 self.spin_cycle.setValue(0)
+    #             self.spin_dlc.set_len_value(msg.length)
+    #         self._rebuild_hex_editors(self.spin_dlc.current_len_value())
+    #         self._set_hex_data(
+    #             bytes([0] * self.spin_dlc.current_len_value()),
+    #             default_mask=[True] * self.spin_dlc.current_len_value(),
+    #         )
+
+    #     self._refresh_buttons()
+
+    # def _on_raw_bytes_debounced(self):
+    #     data = self.edit_raw_bytes.current_value()
+    #     if not data:
+    #         self._raw_baseline = None
+    #         if not self.chk_use_dbc.isChecked():
+    #             self.spin_dlc.set_len_value(8)
+    #             self._rebuild_hex_editors(8)
+    #             self._set_hex_data(bytes([0] * 8), default_mask=[True] * 8)
+    #             self._refresh_buttons()
+    #         return
+    #     self.spin_dlc.set_len_value(len(data))
+    #     padded = data.ljust(len(data), b"\x00")
+    #     self._raw_baseline = padded
+    #     self._rebuild_hex_editors(len(data), data=padded, baseline=padded)
+    #     self._refresh_buttons()
+
+    # def get_hex_raw_string(self) -> str:
+    #     """
+    #     Read current values from self._hex_edits (List[HexByteLineEdit])
+    #     and return CANLogLine-compatible raw hex string.
+
+    #     Example:
+    #         "00 1A FF"
+    #     """
+    #     parts: list[str] = []
+
+    #     for e in self._hex_edits:
+    #         v = e.value()          # HexByteLineEdit.value() -> Optional[int]
+    #         if v is None:
+    #             parts.append("00")
+    #         else:
+    #             parts.append(f"{int(v):02X}")
+
+    #     return " ".join(parts)
+
+    # @property
+    # def entries(self) -> List[CANLogPlay]:
+    #     return list(self._added.values())
+
+    # def _on_add_or_update_clicked(self):
+    #     LOG.debug("_on_add_or_update_clicked")
+    #     self._log_added_state("button Add/Update pressed (before request)")
+    #     cid = self._current_selected_can_id()
+    #     if cid is None:
+    #         return
+    #     cid = int(cid)
+    #     entry = self._build_line_from_ui(cid)
+    #     if cid in self._added:
+    #         entry.send_state = getattr(self._added[cid], "send_state", SendState.NONE)
+    #     else:
+    #         entry.send_state = SendState.NONE
+
+    #     periodic_s = float(entry.timediff or 0.0)
+    #     if periodic_s <= 0:
+    #         LOG.warning("[SEND_PANEL][ADD] invalid periodic for can_id=%s", cid)
+    #         return
+
+    #     self._added[cid] = entry
+    #     self.tree.set_data(self.entries)
+
+    #     self.sender.send_msg_loop_from_line(entry, initial_periodic=periodic_s)
+
+    #     # Keep current values as clean baseline after Add/Update.
+    #     # This ensures Update is disabled until user changes something again.
+    #     self._raw_baseline = None
+    #     self.edit_raw_bytes.setText("")
+
+    #     current_data = hex_raw_to_bytes(entry.raw_data or "")
+    #     self._set_hex_data(
+    #         current_data,
+    #         default_mask=[True] * self.spin_dlc.current_len_value(),
+    #     )
+    #     self._log_added_state("button Add/Update pressed (after request)")
+    #     self._refresh_buttons()
+
+    # def _on_remove_clicked(self):
+    #     LOG.debug("_on_remove_clicked")
+    #     self._log_added_state("button Remove pressed (before request)")
+    #     cid = self._current_selected_can_id()
+    #     if cid is None:
+    #         return
+    #     cid = int(cid)
+    #     channel_id = self._channel_id_from_handle()
+    #     if channel_id is None:
+    #         LOG.warning("[SEND_PANEL][REMOVE] invalid handle for channel_id, can_id=%s", cid)
+    #         return
+    #     LOG.debug(f"[SEND_PANEL][REMOVE] request remove for can_id={cid}")
+    #     self.sender.remove_msg(channel_id, cid)
+    #     self._log_added_state("button Remove pressed (after request, waiting status)")
+
+    # def _on_send_pause_resume_clicked(self):
+    #     LOG.debug("_on_send_pause_resume_clicked")
+    #     cid = self._current_selected_can_id()
+    #     if cid is None:
+    #         return
+    #     cid = int(cid)
+    #     channel_id = self._channel_id_from_handle()
+    #     if channel_id is None:
+    #         LOG.warning("[SEND_PANEL][SEND] invalid handle for channel_id, can_id=%s", cid)
+    #         return
+    #     if cid not in self._added:
+    #         return
+    #     entry = self._added[cid]
+    #     if getattr(entry, "send_state", SendState.NONE) == SendState.DISCONNETED:
+    #         LOG.debug("[SEND_PANEL][SEND] blocked action for disconnected entry can_id=%s", cid)
+    #         return
+
+    #     cycle_ms = float(self.spin_cycle.value())
+    #     periodic_s = cycle_ms / 1000.0
+
+    #     # Decide action based on current button mode
+    #     if self._send_button_mode == "SEND_FIRST":
+    #         if cycle_ms < 1:
+    #             self.sender.send_once_from_entry(entry)
+    #             return
+    #         self.sender.resume(channel_id, cid)
+    #         return
+
+    #     if self._send_button_mode == "PAUSE":
+    #         self.sender.stop(channel_id, cid)
+    #         return
+
+    #     if self._send_button_mode == "RESUME":
+    #         self.sender.resume(channel_id, cid)
+    #         return
+
+    # def _on_pause_all_clicked(self):
+    #     LOG.debug("_on_pause_all_clicked")
+    #     channel_id = self._channel_id_from_handle()
+    #     if channel_id is None:
+    #         LOG.warning("[SEND_PANEL][ALL] invalid handle for channel_id")
+    #         return
+    #     if self._send_all_button_mode == "SEND_ALL":
+    #         self.sender.resume(channel_id, None)
+    #         return
+
+    #     if self._send_all_button_mode == "PAUSE_ALL":
+    #         self.sender.stop(channel_id, None)
+    #         return
+
+    #     self.sender.resume(channel_id, None)
+
+
+    # # -----------------------------
+    # # State / dirty / buttons
+    # # -----------------------------
+    # def _current_selected_can_id(self) -> Optional[int]:
+    #     if self.chk_use_dbc.isChecked():
+    #         return self.combo_msg.current_value()
+    #     return self.edit_msg.current_value()
+
+    # def _channel_id_from_handle(self) -> Optional[int]:
+    #     combo = getattr(self, "combo_channel", None)
+    #     if combo is not None:
+    #         selected_name = combo.currentText().strip()
+    #         if selected_name:
+    #             for handle in self.cnt_model.acquired_channels.keys():
+    #                 try:
+    #                     info = self.cnt_model.get_channel_info(handle)
+    #                     name = str(getattr(info, "name", "") or "").strip()
+    #                     if name == selected_name:
+    #                         return int(handle.channel_idx)
+    #                 except Exception:
+    #                     continue
+    #     if self.handle is None:
+    #         return None
+    #     return int(self.handle.channel_idx)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Callable, Any, Tuple, Set
+from cansrv.module.fs_core import ParsedEntry
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
@@ -20,12 +21,11 @@ value = str
 
 @dataclass
 class DecodedSignalLine:
-    raw_value: int   # DECODED DATA
-    is_cnt: Optional[bool] = field(default=False) # Is signal a Counter?
-    is_chk: Optional[bool] = field(default=False) # Is signal a Checksum?
-    changed: Optional[bool] = field(default=False)
-    _runtime_signal_name: str = field(default="")
-    _runtime_value: Optional[float] = field(default=None)
+    name: str
+    raw_value: str
+    unit: str
+
+    changed: bool = False
 
     parent: CANLogLine | None = field(
         default=None,
@@ -34,190 +34,21 @@ class DecodedSignalLine:
     )
 
     @property
-    def rawvalue(self) -> int:
-        return self.raw_value
+    def signal_line(self) -> str:
+        text = f"{self.name}: {self.raw_value}"
 
-    @rawvalue.setter
-    def rawvalue(self, value: int):
-        self.set_raw_value(value)
+        if self.unit:
+            text += f" {self.unit}"
 
-    def get_raw_value(self) -> int:
-        return self.raw_value
+        return text
 
-    def set_raw_value(self, value: int):
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return
-
-        min_raw, max_raw = self.min_max
-        self.raw_value = max(min_raw, min(max_raw, parsed))
-
-    def set_physical_value(self, physical_value: float) -> bool:
-        """
-        Set physical value for non-choice signal:
-            raw = round((physical - offset) / scale)
-            raw is clamped by min_max
-        """
-        if self.is_choice_value or not self.sig_info:
-            return False
-
-        try:
-            if isinstance(physical_value, str):
-                physical = float(str(physical_value).strip().split()[0].replace(",", "."))
-            else:
-                physical = float(physical_value)
-        except (TypeError, ValueError, IndexError):
-            return False
-
-        scale = float(self.value_scale)
-        if scale == 0.0:
-            return False
-
-        raw = int(round((physical - float(self.value_offset)) / scale))
-        self.set_raw_value(raw)
-        return True
-
-    def get_choice_strings(self) -> List[str]:
-        if not self._sig_info or not self._sig_info.choices:
-            return []
-        return [str(choice) for _, choice in self._sig_info.choices.items()]
-    
-    @property
-    def min_max(self) -> Tuple[int, int]:
-        selected_signal = self._sig_info
-        if not selected_signal:
-            return (0, 255)
-        offset = selected_signal.offset
-        scale_value = selected_signal.scale
-        if selected_signal.choices:
-            min_raw = 0
-            max_raw = len(selected_signal.choices) - 1
-        elif selected_signal.minimum is not None and selected_signal.maximum is not None:
-            min_value = selected_signal.minimum
-            max_value = selected_signal.maximum
-            # Compute raw values and round appropriately to int
-            min_raw = int(round((min_value - offset) / scale_value))
-            max_raw = int(round((max_value - offset) / scale_value))
-        else:
-            min_raw = 0
-            max_raw = 255  # fallback default
-        return min_raw, max_raw
-
-    @property
-    def sig_info(self):
-        return self._sig_info
-
-    @sig_info.setter
-    def sig_info(self, value: cantools.database.can.Signal):
-        if value is self._sig_info:
-            return
-        self._sig_info = value
-
-    @property
-    def signal_name(self) -> str:
-        if not self.sig_info:
-            return self._runtime_signal_name if self._runtime_signal_name else ""
-        return self.sig_info.name
-
-    @property
-    def value_offset(self):
-        if not self.sig_info:
-            return None
-        return self.sig_info.offset if self.sig_info.offset else 0
-    
-    @property
-    def value_len(self):
-        if not self.sig_info:
-            return None
-        return self.sig_info.length
-
-    @property
-    def value_choices(self):
-        if not self.sig_info:
-            return None
-        return self.sig_info.choices if self.sig_info.choices else {}
-
-    @property
-    def value_unit(self):
-        if not self.sig_info:
-            return None
-        return self.sig_info.unit if self.sig_info.unit else ""
-
-    @property
-    def value_scale(self):
-        if not self.sig_info:
-            return None
-        return self.sig_info.scale if self.sig_info.scale else 1.0
-
-    @property
-    def value_float(self) -> float:
-        if not self.sig_info:
-            if self._runtime_value is not None:
-                return float(self._runtime_value)
-            return float(self.raw_value)
-        if self.is_choice_value:
-            raise KeyError("choice signal has no value float")
-        return (float(self.raw_value) * self.value_scale) + self.value_offset
-
-    @property
-    def value(self) -> str:
-        if not self.sig_info:
-            if self._runtime_value is not None:
-                return str(self._runtime_value)
-            return str(self.raw_value)
-        return self.value_choice_str if self.is_choice_value else self.value_str
-
-    @value.setter
-    def value(self, physical_value: float):
-        self.set_physical_value(physical_value)
-
-    @property
-    def value_str(self) -> str:
-        if not self.sig_info:
-            if self._runtime_value is not None:
-                return str(self._runtime_value)
-            return str(self.raw_value)
-        return str((float(self.raw_value) * self.value_scale) + self.value_offset)
-
-    @property
-    def value_choice(self) -> str:
-        if self.value_choices is None:
-            return ""
-        if self.raw_value in self.value_choices:
-            return f"{self.raw_value}: {self.value_choices[self.raw_value]}"
-        else:
-            return ""
-        
-    @property
-    def value_choice_str(self) -> str:
-        if self.value_choices is None:
-            return "Unknown"
-        if self.raw_value in self.value_choices:
-            return str(self.value_choices[self.raw_value])
-        else:
-            return "Unknown"
-
-    @property
-    def is_choice_value(self) -> bool:
-        if not self.value_choices:
-            return False
-        else:
-            return True
-
-    def cal_cnt(self):
-        if self.is_cnt:
-            self.raw_value += 1
-            if self.raw_value >= 2**self.value_len:
-                self.raw_value = 0
-
-    def get_format_signal_show(self, max_len_name: int = 30):
-        name = self.signal_name.ljust(max_len_name)
-        if not self.is_choice_value:
-            show_value = f"{self.value} {self.value_unit}"
-        else:
-            show_value = self.value_choice_str
-        return f"{name} = {show_value}"
+    # def get_format_signal_show(self, max_len_name: int = 30):
+    #     name = self.signal_name.ljust(max_len_name)
+    #     if not self.is_choice_value:
+    #         show_value = f"{self.value} {self.value_unit}"
+    #     else:
+    #         show_value = self.value_choice_str
+    #     return f"{name} = {show_value}"
     
 Signal = DecodedSignalLine
 
@@ -425,22 +256,62 @@ class SignalMetadata:
     value: Optional[float] = None
 
 
-""" 20260716 NOTE: This class is the Viewmodel data for displaying a log line.
-                It should not contains the business logic like cantools.database.can.Message
+# """ NOTE: For presentation data"""
+# @dataclass(frozen=True)
+# class ColumnInfo:
+#     title: str
+
+
+# class ColumnProperty(property):
+#     def __init__(
+#         self,
+#         getter: Callable,
+#         title: str,
+#     ):
+#         super().__init__(getter)
+#         self.column_info = ColumnInfo(title)
+
+
+# def column(title: str):
+#     def decorator(getter):
+#         return ColumnProperty(
+#             getter,
+#             title,
+#         )
+
+#     return decorator
+
+""" NOTE Linking primarary key
+
+                 LogRowId(42)
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+    ParsedEntry             CANLogLine
+    row_id = 42             row_id = 42
+
+"""
+@dataclass(frozen=True)
+class LogRowId:
+    value: int
+
+""" 20260723 NOTE: A UI View data need Presentation + Data to 2 ways UI -> Model, Model -> UI
+            For example the QStandardItem have text, data
+    # row_index: LogRowId
+    # channel: str
+    # can_id: int
+    # direction: str  # 'Rx' or 'Tx'
+    # data_len: int
+    # data: list[int]
+    # changed: bool = False  # True if raw_data changed from previous of same CAN ID
+    # timestamp: float = 0.0
+    # last_timestamp: float = 0.0
 """
 @dataclass
 class CANLogLine:
-   # """ This is the data from parse, not guarantee to map with DBC"""
-   # """ Modify for write operation, then should re-calculate the msg and signal"""
-    channel: str
-    can_id: int
-    direction: str  # 'Rx' or 'Tx'
-    data_len: int
-    data: list[int]
-    changed: bool = False  # True if raw_data changed from previous of same CAN ID
-    line_number: int = 0
-    timestamp: float = 0.0
-    last_timestamp: float = 0.0
+    data_model: ParsedEntry
+
+    #line_number: int = 0
     _timediff: float = 0.0
     _user_message_name: str = field(default="")
     #message_obj: Optional[Message] = field(default=None)
@@ -448,6 +319,134 @@ class CANLogLine:
     signals: list[DecodedSignalLine] = field(default=list)
     last_data: list[int] = field(default=list)
     _color_id: str = ""
+
+    @property
+    def channel(self) -> str:
+        return str(self.data_model.channel)
+
+    @channel.setter
+    def channel(self, value: str) -> None:
+        self.data_model.channel = str(value)
+
+    @property
+    def can_id(self) -> int:
+        return int(self.data_model.can_id)
+
+    @can_id.setter
+    def can_id(self, value: int) -> None:
+        self.data_model.can_id = int(value)
+
+    @property
+    def direction(self) -> str:
+        return str(self.data_model.direction)
+
+    @direction.setter
+    def direction(self, value: str) -> None:
+        self.data_model.direction = value
+
+    @property
+    def data_len(self) -> int:
+        return int(self.data_model.data_len)
+
+    @data_len.setter
+    def data_len(self, value: int) -> None:
+        self.data_model.data_len = int(value)
+
+    @property
+    def data(self) -> list[int]:
+        raw = bytes(self.data_model.data)
+        return list(raw[: self.data_len])
+
+    @data.setter
+    def data(self, value: list[int]) -> None:
+        clipped = [
+            int(v) & 0xFF
+            for v in value
+        ]
+        self.data_model.data = bytes(clipped)
+        self.data_model.data_len = len(clipped)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.data_model.changed)
+
+    @changed.setter
+    def changed(self, value: bool) -> None:
+        self.data_model.changed = int(bool(value))
+
+    @property
+    def timestamp(self) -> float:
+        return float(self.data_model.timestamp)
+
+    @timestamp.setter
+    def timestamp(self, value: float) -> None:
+        self.data_model.timestamp = float(value)
+
+    @property
+    def last_timestamp(self) -> float:
+        return float(self.data_model.last_timestamp)
+
+    @last_timestamp.setter
+    def last_timestamp(self, value: float) -> None:
+        self.data_model.last_timestamp = float(value)
+
+    @property
+    def line_number(self) -> int:
+        row_id = getattr(self.data_model, "row_id", None)
+        if row_id is not None:
+            return int(row_id)
+        return int(self.data_model.line_number)
+
+    @line_number.setter
+    def line_number(self, value: int) -> None:
+        # line_number/row_id may be read-only from pybind depending on build.
+        try:
+            self.data_model.line_number = int(value)
+        except Exception:
+            pass
+
+    """ NOTE: 
+    CANLogLine.from_parsed_entry(row) is an alternative way to construct a CANLogLine
+    """
+    @classmethod
+    def from_parsed_entry(
+        cls,
+        entry: ParsedEntry,
+    ) -> "CANLogLine":
+        return cls(data_model=entry)
+
+    def to_parsed_entry(
+        self,
+    ) -> ParsedEntry:
+        return self.data_model
+    
+    @property
+    def message_line(self) -> str:
+        return self.format_line_log()
+
+    @property
+    def str_timestamp(self) -> str:
+        return f"{self.timestamp:.6f}"
+
+    @property
+    def str_diff(self) -> str:
+        return self.get_format_timediff()
+
+    @property
+    def direction_display(self) -> str:
+        return self.direction
+
+    @property
+    def can_id_str(self) -> str:
+        return f"{self.can_id:X}"
+
+    @property
+    def data_len_display(self) -> int:
+        return self.data_len
+
+    @property
+    def raw_data_bytes(self) -> str:
+        return self.raw_data
     
     @property 
     def raw_data(self) -> str:
@@ -536,65 +535,120 @@ class CANLogLine:
         data_len = str(self.data_len).ljust(3)
         raw_data_bytes = self.raw_data.upper()
         return f"{str_timestamp:>9} {str_diff:<10} {channel_idx_str:<4} {direction:<2} {can_id_str:>8}{separator}{name:<{message_name_len}} {data_len:>2}: {raw_data_bytes}"
+    
+
+""" 20260716 NOTE: This class is the Viewmodel data for displaying a log line.
+                It should not contains the business logic like cantools.database.can.Message
+"""
+# @dataclass
+# class CANLogLine:
+#    # """ This is the data from parse, not guarantee to map with DBC"""
+#    # """ Modify for write operation, then should re-calculate the msg and signal"""
+#     channel: str
+#     can_id: int
+#     direction: str  # 'Rx' or 'Tx'
+#     data_len: int
+#     data: list[int]
+#     changed: bool = False  # True if raw_data changed from previous of same CAN ID
+#     line_number: int = 0
+#     timestamp: float = 0.0
+#     last_timestamp: float = 0.0
+#     _timediff: float = 0.0
+#     _user_message_name: str = field(default="")
+#     #message_obj: Optional[Message] = field(default=None)
+#     """ NOTE: Qt Index Model will handle the look up index mapping for us, so do not need to store dict here."""
+#     signals: list[DecodedSignalLine] = field(default=list)
+#     last_data: list[int] = field(default=list)
+#     _color_id: str = ""
+    
+#     @property 
+#     def raw_data(self) -> str:
+#         # Hex string like "00 1A FF"
+#         return " ".join(f"{int(b) & 0xFF:02X}" for b in self.data)
+
+#     @property 
+#     def last_raw_data(self) -> str:
+#         return " ".join(f"{int(b) & 0xFF:02X}" for b in self.last_data)
+
+#     @property
+#     def channel_idx(self) -> int:
+#         raw = str(self.channel or "")
+#         digits = ""
+#         for ch in reversed(raw):
+#             if ch.isdigit():
+#                 digits = ch + digits
+#             elif digits:
+#                 break
+
+#         if digits:
+#             try:
+#                 return int(digits)
+#             except Exception:
+#                 return 0
+
+#         return 0
+    
+#     @property
+#     def color_id(self) -> str:
+#         return self._color_id
+
+#     def set_color(self, value: str):
+#         self._color_id = value
+
+#     @property
+#     def timediff(self) -> float:
+#         if self._timediff > 0.0:
+#             return self._timediff
         
-    def get_list_signal_show_fromline(self) -> Dict[str,str]:
-        # Check have message obj
-        if not self.message_obj:
-            LOG.critical(f"Process invalid, message object be not calculated")
-            return {}         
-        # Cal signals 
-        # self.cal_signal_for_line()
-        # Get signal show
-        ret = self.message_obj.get_signals_value_show()
-        # Return 
-        return ret
+#         if self.timestamp > self.last_timestamp:
+#             return self.timestamp - self.last_timestamp
+#         else:
+#             return 0.0
+        
+#     @timediff.setter
+#     def timediff(self, value: float):
+#         self._timediff = float(value)
+
+#     def get_format_timediff(self) -> str:
+#         seconds = self.timediff
+#         if seconds < 1:
+#             return f"{int(seconds * 1000)}ms"
+#         elif seconds < 60:
+#             return f"{round(seconds, 1)}s"
+#         elif seconds < 3600:
+#             minutes = int(seconds // 60)
+#             remaining_seconds = round(seconds % 60, 1)
+#             return f"{minutes}m{remaining_seconds}s"
+#         else:
+#             hours = int(seconds // 3600)
+#             minutes = int((seconds % 3600) // 60)
+#             remaining_seconds = round(seconds % 60, 1)
+#         return f"{hours}h{minutes}m{remaining_seconds}s"
     
-    def get_list_signal_name_fromline(self) -> Dict[str,str]:
-        # Check have message obj
-        if not self.message_obj:
-            LOG.critical(f"Process invalid, message object be not calculated")
-            return {}         
-        # Cal signals 
-        #self.cal_signal_for_line()
-        # Get signal show
-        ret = self.message_obj.get_signals_name_list()
-        return ret
+#     """ If the parsed file have no message name -> Display one in DBC"""
+#     @property
+#     def message_name(self) -> str:
+#         return self._user_message_name
+        
+#     @message_name.setter
+#     def message_name(self, value: str):
+#         self._user_message_name = value
 
-class SendState(Enum):
-    NONE = 0
-    PAUSED = 1
-    SENDING = 2
-    DISCONNETED = 3
-    
-@dataclass
-class CANLogPlay(CANLogLine):
-    send_state: SendState = SendState.NONE
+#     """ 2026/02/08: ljust() only works with monospace fontsv """
+#     def format_line_log(self, message_name_max_len = 30) -> str:
+#         message_name_len = message_name_max_len if message_name_max_len > 30 else 30
+#         str_timestamp = f"{self.timestamp:.6f}".ljust(15)
+#         channel_idx_str = f"CH{self.channel_idx}".ljust(4)
+#         direction = self.direction.ljust(4)
+#         str_diff = self.get_format_timediff()
+#         can_id_str = f"{self.can_id:X}".rjust(8)
+#         message_name = self.message_name
+#         name = message_name.ljust(message_name_len)
+#         separator = " - " if message_name else "   "
+#         data_len = str(self.data_len).ljust(3)
+#         raw_data_bytes = self.raw_data.upper()
+#         return f"{str_timestamp:>9} {str_diff:<10} {channel_idx_str:<4} {direction:<2} {can_id_str:>8}{separator}{name:<{message_name_len}} {data_len:>2}: {raw_data_bytes}"
 
-    @property
-    def is_disconnect(self) -> bool:
-        return self.send_state == SendState.DISCONNETED
-
-    @property
-    def is_disconnected(self) -> bool:
-        return self.is_disconnect
-
-    @property
-    def is_paused(self) -> bool:
-        return self.send_state == SendState.PAUSED
-
-    @property
-    def is_send(self) -> bool:
-        return self.send_state == SendState.SENDING
-
-    @is_send.setter
-    def is_send(self, value):
-        if isinstance(value, SendState):
-            self.send_state = value
-            return
-        if bool(value):
-            self.send_state = SendState.SENDING
-        elif self.send_state != SendState.DISCONNETED:
-            self.send_state = SendState.PAUSED
     
 
 """ STRICT PERFORMACE CONSIDERATION: This class is designed"""
