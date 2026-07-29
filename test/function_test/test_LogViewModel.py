@@ -9,7 +9,7 @@ from cansrv.file_service import FileService, get_file_service
 from cansrv.metadata_id import LogId as RecordId
 from cansrv.status import ParserStatus
 from mock_vm import ParseModel
-from lw.test_event import wait
+from lw.test_event import wait_evaluation
 from canapp.vm.log_viewmodel import (
     LogViewModel,
     MsgFilter,
@@ -17,6 +17,7 @@ from canapp.vm.log_viewmodel import (
     TimeFilter,
 )
 from canapp.vm.data_object import CANLogLine
+from canapp.container import AppContainer
 
 pytest_plugins = ["fixture"]
 
@@ -28,10 +29,14 @@ POLL_INTERVAL = 0.1
 TEST_ASC_PATH = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1.asc"
 
 
+# @pytest.fixture
+# def app_vm() -> LogViewModel:
+# 	print("CS app_vm")
+# 	return LogViewModel()
+
 @pytest.fixture
-def app_vm() -> LogViewModel:
-	print("CS app_vm")
-	return LogViewModel()
+def container():
+	yield AppContainer()
 
 @pytest.mark.parametrize(
     "file_path",
@@ -39,14 +44,14 @@ def app_vm() -> LogViewModel:
         TEST_ASC_PATH,
     ],
 )
-def test_05_parse_log(file_service: tuple[FileService, LogViewModel], file_path: str) -> None:
-    _, vm = file_service
+def test_05_parse_log(can_service: AppContainer, file_path: str) -> None:
+    vm = can_service.log_vm()
 
     vm.startParsing(file_path)
     assert vm.parser_done_event.wait(PARSE_TIMEOUT)
 
-    page_entries = wait(lambda: vm.entries, max_ms=TIMEOUT_LOADPAGE_MS)
-    total = wait(lambda: vm.totalLines, max_ms=TIMEOUT_QUERY_MS)
+    page_entries = wait_evaluation(lambda: vm.entries, max_ms=TIMEOUT_LOADPAGE_MS)
+    total = wait_evaluation(lambda: vm.totalLines, max_ms=TIMEOUT_QUERY_MS)
 
     assert page_entries is not None
     assert total > 0

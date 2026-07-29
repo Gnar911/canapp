@@ -5,8 +5,7 @@ from typing import Any, Optional
 from PySide6.QtCore import Property, Signal, Slot, QObject, Qt
 from PySide6.QtGui import QStandardItemModel, QStandardItem
 from cansrv.test.mock_vm import *
-from cansrv.can_srv import CANService
-from cansrv.can_srv import get_can_service
+from cansrv.can_srv import CANService, get_can_service
 from cansrv.file_service import LogId
 from fs_test.mock_vm import ParseModel, DBCModel
 from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
@@ -16,6 +15,8 @@ from typing import TypeAlias
 from cansrv.can_srv import CANDeviceInfo
 from lw.srv_event import SrvEvent
 from dataclasses import replace
+from lw.qt.qtobject_adapter import QtViewModelBase
+from cansrv.file_service import FileService
 
 """ NOTE: State machine define region"""
 @dataclass(frozen=True)
@@ -133,28 +134,41 @@ class CheckItem(QStandardItem):
 
 """
 
-class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, SendStatusVM, ParseModel, DBCModel):
+class ReplayViewModel(QtViewModelBase, ReplayStatusVM, ScannerVM, SendStatusVM, ParseModel, DBCModel):
     replayStateChanged = Signal()
     progressChanged = Signal()
     dbcChanged = Signal()
 
-    def __init__(self):
-        # QObject must be initialized once even when multiple parent __init__ are called.
-        if not getattr(self, "_qt_obj_initialized", False):
-            QObject.__init__(self)
-            self._qt_obj_initialized = True
+    def __init__(self, can_srv: CANService, file_srv: FileService):
+        # # QObject must be initialized once even when multiple parent __init__ are called.
+        # if not getattr(self, "_qt_obj_initialized", False):
+        #     QObject.__init__(self)
+        #     self._qt_obj_initialized = True
 
-        # Qt QObject does not continue Python super() into dataclass mixins.
-        # Initialize mixins explicitly so expected event fields always exist.
-        if not getattr(self, "_replay_mixins_initialized", False):
-            ReplayStatusVM.__init__(self)
-            ScannerVM.__init__(self)
-            SendStatusVM.__init__(self)
-            ParseModel.__init__(self)
-            DBCModel.__init__(self)
-            self._replay_mixins_initialized = True
+        # # Qt QObject does not continue Python super() into dataclass mixins.
+        # # Initialize mixins explicitly so expected event fields always exist.
+        # if not getattr(self, "_replay_mixins_initialized", False):
+        #     ReplayStatusVM.__init__(self)
+        #     ScannerVM.__init__(self)
+        #     SendStatusVM.__init__(self)
+        #     ParseModel.__init__(self)
+        #     DBCModel.__init__(self)
+        #     self._replay_mixins_initialized = True\
 
-        self._can_service = get_can_service()
+        super().__init__()
+
+        self.init_mixins(
+            ReplayStatusVM,
+            ScannerVM,
+            SendStatusVM,
+            ParseModel,
+            DBCModel,
+        )
+
+        self._can_service = can_srv
+        self._file_service = file_srv
+        can_srv.subscribe(self.on_status_callback)
+        file_srv.subscribe_any(self.on_status_callback)
         self._dbc_id: DBCId | None = None
         self._state: ReplayState = Empty()
         self._config = ReplayConfig()
@@ -344,39 +358,39 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, SendStatusVM, ParseMod
             )
             return
         
-    def on_scan_status(self, payload: SrvEvent) -> None:
-        super().on_scan_status(payload)
-        if isinstance(payload, ScanDevicePluggedStatus):
-            # NOTE: avoid duplicate add when repeated plug notifications arrive
-            # if payload.device_info not in self.available_devices:
-            #     self.available_devices.append(payload.device_info)
-            pass
+    # def on_scan_status(self, payload: SrvEvent) -> None:
+    #     super().on_scan_status(payload)
+    #     if isinstance(payload, ScanDevicePluggedStatus):
+    #         # NOTE: avoid duplicate add when repeated plug notifications arrive
+    #         # if payload.device_info not in self.available_devices:
+    #         #     self.available_devices.append(payload.device_info)
+    #         pass
 
-        if isinstance(payload, ScanDeviceUnpluggedStatus):
-            device = payload.device_info
+    #     if isinstance(payload, ScanDeviceUnpluggedStatus):
+    #         device = payload.device_info
 
-            # self.available_devices = [
-            #     d for d in self.available_devices
-            #     if d.device_id != device.device_id
-            # ]
+    #         # self.available_devices = [
+    #         #     d for d in self.available_devices
+    #         #     if d.device_id != device.device_id
+    #         # ]
 
-            self._acquired_devices = [
-                d for d in self._acquired_devices
-                if d.device_id != device.device_id
-            ]
+    #         self._acquired_devices = [
+    #             d for d in self._acquired_devices
+    #             if d.device_id != device.device_id
+    #         ]
 
-        if isinstance(payload, ScanChannelAcquiredStatus):
-            device = payload.device_info
-            #self.available_devices.remove(device)
-            self._acquired_devices.append(device)
+    #     if isinstance(payload, ScanChannelAcquiredStatus):
+    #         device = payload.device_info
+    #         #self.available_devices.remove(device)
+    #         self._acquired_devices.append(device)
 
-        if isinstance(payload, ScanChannelReleasedStatus):
-            device = payload.device_info
-            self._acquired_devices.remove(device)
-            #self.available_devices.append(device)
+    #     if isinstance(payload, ScanChannelReleasedStatus):
+    #         device = payload.device_info
+    #         self._acquired_devices.remove(device)
+    #         #self.available_devices.append(device)
 
-        """ NOTE: Do not have the Reactor for list data object -> manual emit state change """
-        self.replayStateChanged.emit()
+    #     """ NOTE: Do not have the Reactor for list data object -> manual emit state change """
+    #     self.replayStateChanged.emit()
                 
     """ NOTE: There is no button to set source on the replay screen -> this API View should not existed"""
     # def setSource(self, record_id: LogId) -> bool:
@@ -384,54 +398,54 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, SendStatusVM, ParseMod
 
     """ NOTE: Button start replay"""
     @Slot()
-    def startReplay(self) -> None:
-        self._can_service.start_replay()
+    def startReplay(self):
+        return self._can_service.start_replay()
         return None
 
     """ NOTE: Button stop replay"""
     @Slot()
-    def stopReplay(self) -> None:
-        self._can_service.stop_replay()
+    def stopReplay(self):
+        return self._can_service.stop_replay()
         return None
 
     """ NOTE: Button pause replay"""
     @Slot()
-    def pauseReplay(self) -> None:
-        self._can_service.pause_replay()
+    def pauseReplay(self):
+        return self._can_service.pause_replay()
         return None
 
     @Slot()
     def resumeReplay(self):
-        self._can_service.resume_replay()
+        return self._can_service.resume_replay()
 
     @Slot(bool)
     def setLoop(self, enabled: bool):
-        self._can_service.set_loop(enabled)
+        return self._can_service.set_loop(enabled)
 
     @Slot(int)
     def setRepeat(self, count: int):
-        self._can_service.set_repeat(count)
+        return self._can_service.set_repeat(count)
 
     @Slot("QVariantList")
     def setMsgIdFilter(self, id: int):
         # ids = [int(v) for v in msg_ids]
-        self._can_service.set_msg_id_filter(id)
+        return self._can_service.set_msg_id_filter(id)
 
     @Slot()
     def clearMsgIdFilter(self):
-        self._can_service.set_msg_id_filter(None)
+        return self._can_service.set_msg_id_filter(None)
 
     @Slot(float, float)
     def setTimeScope(self, start_ts: float, end_ts: float):
-        self._can_service.set_time_scope(start_ts, end_ts)
+        return self._can_service.set_time_scope(start_ts, end_ts)
 
     @Slot()
     def clearTimeScope(self):
-        self._can_service.set_time_scope(None, None)
+        return self._can_service.set_time_scope(None, None)
 
     @property
     def isHavingDevice(self):
-        return len(self._acquired_devices) != 0
+        return len(self.acquired_devices) != 0
 
     @property
     def isReplay(self):
@@ -486,9 +500,9 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, SendStatusVM, ParseMod
 
     @property
     def totalFrames(self) -> int:
-        if self.metadata is None:
+        if self._metadata is None:
             return 0
-        return self.metadata.fetch_count()
+        return self._metadata.fetch_count()
 
     @property
     def targetLog(self) -> str:
@@ -509,7 +523,7 @@ class ReplayViewModel(QObject, ReplayStatusVM, ScannerVM, SendStatusVM, ParseMod
         )
 
         candb = (
-            get_file_service().get_candb_data(self.dbc_id)
+            self._file_service.get_candb_data(self.dbc_id)
             if self.dbc_id is not None
             else None
         )

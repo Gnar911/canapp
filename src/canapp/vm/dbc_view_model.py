@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from PySide6.QtCore import Signal, Slot, QTimer, QObject
 
 # from .base_view_model import BaseViewModel
-from cansrv.file_service import get_file_service, DBCId
+from cansrv.file_service import get_file_service, DBCId, FileService
+from cansrv.can_srv import CANService, get_can_service
 from cansrv.application_events import DBCLoadedEvent
+from lw.srv_event import SrvEvent
 from cansrv.test.mock_vm import ParseModel, DBCModel
 from pathlib import Path
 from PySide6.QtCore import (
@@ -102,9 +104,13 @@ class DbcViewModel(QObject, DBCModel):
     onMessageSelect = Signal()
     signalSelectChanged = Signal()
 
-    def __init__(self):
+    def __init__(self, can_service: CANService, file_service: FileService):
         super().__init__()
-        #self._file_service = get_file_service()
+        # injected services (fall back to singletons)
+        self._can_service = can_service
+        self._file_service = file_service
+        file_service.subscribe_any(self.on_status_callback)
+        can_service.subscribe(self.on_status_callback)
         self._dbc_id: DBCId | None = None
 
         self._items: list[DbcItem] = []
@@ -202,13 +208,17 @@ class DbcViewModel(QObject, DBCModel):
         self._dbc_id = value
         self.dbcChanged.emit()
 
-    def on_dbc_model_loaded(self, event: DBCLoadedEvent):
-        super().on_dbc_model_loaded(event)
+    """ BUG: AttributeError: 'ScanDeviceUnpluggedStatus' object has no attribute 'dbc_id'"""
+    def on_status_callback(self, event: SrvEvent):
+        super().on_status_callback(event)
+
+        if not isinstance(event, DBCLoadedEvent):
+            return 
 
         if event.dbc_id is None:
             return
         
-        candb = get_file_service().get_candb_data(event.dbc_id)
+        candb = self._file_service.get_candb_data(event.dbc_id)
         db_path = str(candb.file_path)
 
         item = DbcItem(event.dbc_id, db_path)
@@ -243,7 +253,7 @@ class DbcViewModel(QObject, DBCModel):
     @Slot(str)
     def loadDBC(self, db_file_path: str) -> None:
         # TODO: Could implement cache here if the same file_path and track changed
-        get_file_service().parse_dbc_file(db_file_path)
+        self._file_service.parse_dbc_file(db_file_path)
 
     """ ui binding 
     Store selected_dbc in ViewModel
@@ -269,12 +279,12 @@ class DbcViewModel(QObject, DBCModel):
     def dbcMessagesCount(self) -> int:
         if self.dbc_id is None:
             return 0
-        candb = get_file_service().get_candb_data(self.dbc_id)
+        candb = self._file_service.get_candb_data(self.dbc_id)
         msg_defs = list(candb.messages)
         return len(msg_defs)
 
     @property
     def currentDbcFile(self) -> str:
         #TODO: Could use the DbcItem for cache instead
-        candb = get_file_service().get_candb_data(self.dbc_id)
+        candb = self._file_service.get_candb_data(self.dbc_id)
         return str(candb.file_path)

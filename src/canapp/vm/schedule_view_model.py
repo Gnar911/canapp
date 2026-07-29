@@ -8,7 +8,8 @@ from PySide6.QtCore import Signal, Slot, QObject
 from copy import deepcopy
 
 from cansrv.test.mock_vm import SendStatusVM, ScannerVM, DBCModel
-from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
+from lw.qt.qtobject_adapter import QtViewModelBase
+from cansrv.file_service import FileService, LogId, MetaDataStorageInterface, DBCId, CANDBInfo
 from cansrv.test.mock_vm import *
 from cansrv.can_srv import CANService, CANDeviceInfo
 from cansrv.snd_contract import (
@@ -25,8 +26,8 @@ from cansrv.snd_contract import (
     SndCmd
 )
 from lw.srv_event import SrvEvent
-from cansrv.module.fs_core import ParsedEntry
-from data_object import (
+from cansrv.module.fs_core import LogRecord
+from canapp.vm.data_object import (
     CANLogLine,
     DecodedSignalLine,
 )
@@ -45,7 +46,7 @@ class MessageItem:
 @dataclass
 class CANPlayEntry:
     device_info: CANDeviceInfo | None
-    entry: ParsedEntry
+    entry: LogRecord
     initial_periodic: float
 
     @property
@@ -206,7 +207,7 @@ class CANLogPlay:
         cls,
         # device_info: CANDeviceInfo,
     ) -> "CANLogPlay":
-        entry = ParsedEntry()
+        entry = LogRecord()
 
         entry.can_id = 0
         entry.channel = ""
@@ -214,9 +215,6 @@ class CANLogPlay:
         entry.data_len = 0
         entry.direction = 1
         entry.timestamp = 0.0
-        entry.changed = 0
-        entry.last_timestamp = 0.0
-        entry.line_number = -1
 
         return cls(
             is_play=False,
@@ -229,21 +227,23 @@ class CANLogPlay:
             ),
         )
     
-class ScheduleViewModel(QObject, SendStatusVM, ScannerVM, DBCModel):
-    # entriesReset = Signal()
-    # entryChanged = Signal(object)
-    # entryInserted = Signal(object)
-    # entryRemoved = Signal(object)
-    # entriesReset = Signal()
-    # entriesReset = Signal()
+class ScheduleViewModel(QtViewModelBase, SendStatusVM, ScannerVM, DBCModel):
     entriesChanged = Signal()
     stateChanged = Signal()
     dbcChanged = Signal()
 
-    def __init__(self):
+    def __init__(self, can_service: CANService, file_service: FileService):
         super().__init__()
-        self._can_service = CANService()
-        self._acquired_devices: list[CANDeviceInfo] = []
+        # Initialize mixins after QObject/QtViewModelBase initialization
+        self.init_mixins(SendStatusVM, ScannerVM, DBCModel)
+
+        if can_service is None:
+            raise TypeError("ScheduleViewModel requires a CANService instance")
+        self._can_service = can_service
+        self._file_service = file_service
+        #file_service.subscribe_any(self.on_status_callback)
+        can_service.subscribe(self.on_status_callback)
+        #self._acquired_devices: list[CANDeviceInfo] = []
 
         self._editing_entry: CANLogPlay = CANLogPlay.create_default()
         self._entries: list[CANLogPlay] = [self._editing_entry]
@@ -282,116 +282,125 @@ class ScheduleViewModel(QObject, SendStatusVM, ScannerVM, DBCModel):
         self._dbc_id = value
         self.dbcChanged.emit()
 
-    def on_dbc_loaded(self, event: DBCLoadedEvent):
-        DBCModel.on_dbc_model_loaded(event=event)
-        self.dbc_id = event.dbc_id
-
-    def on_scan_status(self, payload: SrvEvent) -> None:
-        ScannerVM.on_scan_status(payload)
-        if isinstance(payload, ScanDevicePluggedStatus):
-            # NOTE: avoid duplicate add when repeated plug notifications arrive
-            # if payload.device_info not in self.available_devices:
-            #     self.available_devices.append(payload.device_info)
-            pass
-
-        if isinstance(payload, ScanDeviceUnpluggedStatus):
-            device = payload.device_info
-
-            self._acquired_devices = [
-                d for d in self._acquired_devices
-                if d.device_id != device.device_id
-            ]
-
-            self._acquired_devices.remove(device)
-            play = next(
-                (
-                    play
-                    for play in self._entries
-                    if play.data_model.device_info
-                    == payload.device_info
-                ),
-                None,
-            )
-            self._entries.remove(play)
-            self.entriesChanged.emit()
-
-        if isinstance(payload, ScanChannelAcquiredStatus):
-            device = payload.device_info
-            self._acquired_devices.append(device)
-
-        if isinstance(payload, ScanChannelReleasedStatus):
-            device = payload.device_info
-            self._acquired_devices.remove(device)
-            play = next(
-                (
-                    play
-                    for play in self._entries
-                    if play.data_model.device_info
-                    == payload.device_info
-                ),
-                None,
-            )
-            self._entries.remove(play)
-            self.entriesChanged.emit()
-
-        self.stateChanged.emit()
-
     @property
     def isHavingDevice(self):
-        return len(self._acquired_devices) != 0
+        return len(self.acquired_devices) != 0
     
     @Slot(object)
-    def sendMsgLoop(self, entry: CANPlayEntry) -> None:
-        self._can_service.send_msg_loop(
+    def sendMsgLoop(self, entry: CANPlayEntry):
+        if entry.device_info is None:
+            return
+        # LOG.debug("sendMsgLoop")
+        return self._can_service.send_msg_loop(
         entry.device_info,
         entry.entry,
         entry.initial_periodic,
     )
     @Slot(object)
-    def sendOnce(self, entry: CANPlayEntry) -> None:
-        self._can_service.send_once(
+    def sendOnce(self, entry: CANPlayEntry):
+        return self._can_service.send_once(
             entry.device_info,
             entry.entry,
         )
         return None
 
     @Slot(object)
-    def pauseMsg(self, entry: CANPlayEntry) -> None:
-        self._can_service.pause_msg(
+    def pauseMsg(self, entry: CANPlayEntry):
+        return self._can_service.pause_msg(
             entry.device_info,
             entry.entry,
         )
         return None
 
     @Slot(object)
-    def resumeMsg(self, entry: CANPlayEntry) -> None:
-        self._can_service.resume_msg(
+    def resumeMsg(self, entry: CANPlayEntry):
+        return self._can_service.resume_msg(
             entry.device_info,
             entry.entry,
         )
         return None
 
     @Slot(object)
-    def removeMsg(self, entry: CANPlayEntry) -> None:
-        self._can_service.remove_msg(
+    def removeMsg(self, entry: CANPlayEntry):
+        return self._can_service.remove_msg(
             entry.device_info,
             entry.entry,
         )
         return None
 
     @Slot()
-    def clear(self) -> None:
-        self._can_service.clear()
+    def clear(self):
+        return self._can_service.clear()
         return None
 
     @Slot("QVariant", "QVariant", float)
-    def updatePeriodic(self, entry: CANPlayEntry) -> None:
-        self._can_service.update_periodic(device_info, entry, period)
-        return None
+    def updatePeriodic(self, entry: CANPlayEntry):
+        return self._can_service.update_periodic(device_info, entry, period)
+        return Nonei
+    
+    """BUG: Make sure all the status callbacks of the VM are called so that the event is set."""
+    def on_status_callback(self, status):
+        #LOG.debug("ScheduleViewModel.on_status_callback")
+        # Mixin callbacks already chain with super(); call once to avoid
+        # processing the same event multiple times.
+        super().on_status_callback(status)
 
-    def on_status_callback(self, status: SrvEvent) -> None:
-        SendStatusVM.on_send_status(self, status)
         evt = status
+
+        if isinstance(evt, DBCLoadedEvent):
+            self.dbc_id = evt.dbc_id
+            return
+
+        """ NOTE: Avoid duplicate the device state here"""
+        # if isinstance(evt, ScanDeviceUnpluggedStatus):
+        #     device = evt.device_info
+
+        #     # Remove from acquired devices (idempotent)
+        #     self._acquired_devices = [
+        #         d for d in self._acquired_devices
+        #         if d.device_id != device.device_id
+        #     ]
+
+        #     # Remove all replay entries for this device (idempotent)
+        #     before = len(self._entries)
+        #     self._entries = [
+        #         play
+        #         for play in self._entries
+        #         if play.data_model.device_info != device
+        #     ]
+
+        #     if len(self._entries) != before:
+        #         self.entriesChanged.emit()
+
+        # elif isinstance(evt, ScanChannelAcquiredStatus):
+        #     device = evt.device_info
+
+        #     # Ignore duplicate acquire notifications
+        #     if all(d.device_id != device.device_id for d in self._acquired_devices):
+        #         self._acquired_devices.append(device)
+
+
+        # elif isinstance(evt, ScanChannelReleasedStatus):
+        #     device = evt.device_info
+
+        #     # Remove from acquired devices (idempotent)
+        #     self._acquired_devices = [
+        #         d for d in self._acquired_devices
+        #         if d.device_id != device.device_id
+        #     ]
+
+        #     # Remove replay entries for this device (idempotent)
+        #     before = len(self._entries)
+        #     self._entries = [
+        #         play
+        #         for play in self._entries
+        #         if play.data_model.device_info != device
+        #     ]
+
+        #     if len(self._entries) != before:
+        #         self.entriesChanged.emit()
+
+        # self.stateChanged.emit()
 
         if isinstance(evt, SndClear):
             self._entries.clear()
@@ -399,7 +408,7 @@ class ScheduleViewModel(QObject, SendStatusVM, ScannerVM, DBCModel):
             return
 
         if isinstance(evt, SndDeviceAccquired):
-            #NOTE: Handled at scanner vm
+            # NOTE: Handled at ScannerVM
             return
 
         if isinstance(evt, SndDeviceUnaccquired):
@@ -407,73 +416,69 @@ class ScheduleViewModel(QObject, SendStatusVM, ScannerVM, DBCModel):
                 (
                     play
                     for play in self._entries
-                    if play.data_model.device_info
-                    == evt.device_info
+                    if play.data_model.device_info == evt.device_info
                 ),
                 None,
             )
-            self._entries.remove(play)
-            self.entriesChanged.emit()
+
+            if play is not None:
+                self._entries.remove(play)
+                self.entriesChanged.emit()
+
             return
 
         if not isinstance(evt, SndCmd):
             return
-        
+
         play = next(
             (
                 play
                 for play in self._entries
-                if play.data_model.identity
-                == evt.identity
+                if play.data_model.identity == evt.identity
             ),
             None,
         )
 
         if play is None:
             return
-        
+
         if isinstance(evt, SndAdd):
             self._entries.append(play)
-
-            """ NOTE: Update Tree UI"""
-            #self.entryInserted.emit()
+            # NOTE: Update Tree UI
+            # self.entryInserted.emit()
 
         if isinstance(evt, SndPause):
             play.is_play = False
             play.is_pause = True
-            # play.is_disconnet = False
+            # play.is_disconnect = False
 
         if isinstance(evt, SndResume):
             play.is_play = True
             play.is_pause = False
-            #play.is_disconnet = False
+            # play.is_disconnect = False
 
         if isinstance(evt, SndRemove):
             self._entries.remove(play)
-            #self.entryRemoved.emit()
+            # self.entryRemoved.emit()
 
         if isinstance(evt, SndUpdatePeriod):
-            #TODO: implement ?
+            # TODO: implement
             return
 
         if isinstance(evt, SndUpdateData):
-            #TODO: implement ?
+            # TODO: implement
             return
 
         self.entriesChanged.emit()
 
-    """ NOTE: DBC re-evaluation"""
     @property
     def canIDList(self) -> list[MessageItem]:
         if self.dbc_id is None:
             return []
-        candb = get_file_service().get_candb_data(self.dbc_id)
+        candb = self._file_service.get_candb_data(self.dbc_id)
         msg_defs = list(candb.messages)
 
-        message_lists: list[MessageItem] = []
+        message_lists:  list[MessageItem] = []
         for msg in msg_defs:
             message_lists.append(
-                MessageItem(can_id=msg.frame_id, msg_name=msg.name)
-            )
-        return message_lists
-
+                MessageItem(can_id=msg.frame_id, msg_name=msg.name))

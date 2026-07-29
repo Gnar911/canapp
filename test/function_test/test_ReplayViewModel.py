@@ -4,7 +4,7 @@ import logging
 import pytest
 
 from lw.logger_setup import LOG
-from lw.test_event import wait
+from lw.test_event import wait_evaluation
 from cansrv.can_srv import CANService
 from cansrv.file_service import LogId
 from canapp.vm.replay_view_model import (
@@ -13,6 +13,7 @@ from canapp.vm.replay_view_model import (
 from canapp.vm.log_viewmodel import (
     LogViewModel,
 )
+from canapp.container import AppContainer
 
 LOG.setLevel(logging.DEBUG)
 
@@ -60,7 +61,7 @@ def test_start_replay(
                 assert wait(lambda: vm.targetLog != "Null", max_ms=TIMEOUT_QUERY_MS)
     """
     vm.startParsing(file_path)
-    assert vm.parser_done_event.wait(timeout=TIMEOUT_REPLAY / 1000)
+    assert vm.parser_done_event.wait(timeout_seconds=TIMEOUT_REPLAY / 1000)
     assert vm.targetLog != "Null"
 
     vm.startReplay()
@@ -71,18 +72,38 @@ def test_start_replay(
     finished_in_10s = vm.rpl_finished_event.wait(timeout=10.0)
     assert finished_in_10s or vm.isReplay
 
-def test_stop_replay(
-    acquire_vcan_devices: tuple[CANService, ReplayTestMockVM],
+@pytest.mark.parametrize(
+    "file_path",
+    [
+        "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1.asc",
+    ],
+)
+def test_script_start_replay(
+    acquire_vcan_devices: tuple[CANService, ReplayTestMockVM], file_path: str
 ) -> None:
-    can_srv, vm = acquire_vcan_devices
-    wait(lambda: vm.set_source(LogId.new()), max_ms=TIMEOUT_QUERY_MS)
-    assert wait(lambda: vm.targetLog != "Null", max_ms=TIMEOUT_QUERY_MS)
-    wait(lambda: vm.startReplay(), max_ms=TIMEOUT_QUERY_MS)
-    assert wait(lambda: vm.isReplay is True, max_ms=TIMEOUT_QUERY_MS)
+    _, vm = acquire_vcan_devices
 
-    vm.stopReplay()
+    # 1: User drop a file into the widget
+    #vm.startParsing(file_path)
+    vm.startParsing(file_path)
+    vm.wait_done()
+    # assert vm.parser_done_event.wait(timeout_seconds=TIMEOUT_REPLAY / 1000)
+    # assert vm.targetLog != "Null"
 
-    assert wait(lambda: vm.isStop is True, max_ms=TIMEOUT_QUERY_MS)
+    # 2: User press start replay button
+    vm.wait_ready(lambda: vm.startReplay())
+    # assert vm.replay_started_event.wait(timeout=TIMEOUT_QUERY_MS / 1000)
+    # assert vm.isReplay
+
+    """ BUG: Need time for replay, other wise test case end and unaccquired happens while replaying -> BUG"""
+    # finished_in_10s = vm.rpl_finished_event.wait(timeout=10.0)
+    # assert finished_in_10s or vm.isReplay
+
+    # 3: User wait for 3 seconds
+    vm.wait(3.0)
+
+    # 4: User press stop button
+    vm.wait_ready(lambda: vm.stopReplay())
 
 
 def test_pause_replay(

@@ -7,6 +7,7 @@ from lw.logger_setup import LOG
 from lw.test_event import wait
 from cansrv.test.fixture import CANService
 from canapp.vm.channel_view_model import ChannelViewModel
+from canapp.container import AppContainer
 
 LOG.setLevel(logging.DEBUG)
 
@@ -26,20 +27,14 @@ def test_channel_view_model_defaults(
     _, vm, _ = setup_vcan_devices
 
     assert wait(lambda: isinstance(vm.vendor_list, list), max_ms=TIMEOUT_QUERY_MS)
-    assert wait(
-        lambda: isinstance(vm.available_device_lists, list),
-        max_ms=TIMEOUT_QUERY_MS,
-    )
+    assert wait(lambda: isinstance(vm.available_device_lists, list), max_ms=TIMEOUT_QUERY_MS,)
 
 def test_channel_view_model_call_vm_functions(
     setup_vcan_devices: tuple[CANService, ChannelViewModel, int],
 ) -> None:
     _, vm, _ = setup_vcan_devices
 
-    listed = wait(
-        lambda: vm.available_device_lists,
-        max_ms=TIMEOUT_QUERY_MS,
-    )
+    listed = wait(lambda: vm.available_device_lists, max_ms=TIMEOUT_QUERY_MS,)
     assert listed, "No available devices found from viewmodel"
 
     selected_id = listed[0]

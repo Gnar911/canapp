@@ -2,35 +2,53 @@ from __future__ import annotations
 
 import logging
 import pytest
+from dependency_injector import providers
+import time
 
 from lw.logger_setup import LOG
-from lw.test_event import wait
+from lw.test_event import wait_evaluation
 from cansrv.file_service import FileService, LogId
-from cansrv.application_events import RecorderStatusEvent
-from cansrv.status import RecorderStatus
-from canapp.vm.record_viewmodel import RecordViewModel
-
-LOG.setLevel(logging.DEBUG)
-
-pytest_plugins = ["fixture"]
-
-TIMEOUT_QUERY_MS = 1000
-
-
-@pytest.fixture
-def app_vm() -> RecordViewModel:
-    print("CS app_vm")
-    return RecordViewModel()
-
+from canapp.vm.log_viewmodel import LogViewModel
+from canapp.vm.record_viewmodel import (
+    RecordViewModel,
+)
+from canapp.vm.schedule_view_model import (
+    ScheduleViewModel, CANPlayEntry, LogRecord
+)
+from canapp.vm.replay_view_model import (
+    ReplayViewModel,
+)
+from canapp.container import AppContainer
 
 def test_record_view_model_call_vm_functions(
-    file_service: tuple[FileService, RecordViewModel],
+    setup_vcan_devices: tuple[AppContainer, int],
 ) -> None:
-    _, vm = file_service
+    app, num = setup_vcan_devices
 
-    vm.startNewRecording()
-    vm.stopRecording()
-    vm.row = 1
+    device = app.channel_vm().available_devices[0]
+    app.channel_vm().wait_ready(lambda: app.channel_vm().acquireDevice(device))
 
-    assert vm.saveRecord("sample") is False
-    assert wait(lambda: vm.row == 1, max_ms=TIMEOUT_QUERY_MS)
+    # 1: User create the entry from treeview on channel panel
+    device = app.channel_vm().acquired_devices[0]
+    parsed = LogRecord()
+    parsed.can_id = 0x123
+    parsed.channel = "can0"
+    parsed.data = bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88])
+    parsed.data_len = 8
+    parsed.direction = 1          # RX or TX depending on your enum
+    parsed.timestamp = 1.234567   # seconds
+    entry = CANPlayEntry(device_info=device, entry=parsed, initial_periodic=500.0)
+
+    # 2: User press send button on send panel
+    app.schedule_vm().wait_ready(lambda: app.schedule_vm().sendMsgLoop(entry))
+
+    # 6: The send loop process keep running at the background for 3 seconds
+    time.sleep(3.0)
+    display_entry = wait_evaluation(lambda: app.record_vm().entry, max_ms=16.7, name= "entry eval")
+    assert display_entry is not None
+
+    # 7: User back and press pause send
+    app.schedule_vm().wait_ready(lambda: app.schedule_vm().pauseMsg(entry))
+
+    #8: Auto release device #TODO need to add
+    app.channel_vm().wait_ready(lambda: app.channel_vm().releaseDevice(device))

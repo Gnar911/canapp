@@ -6,8 +6,7 @@ from PySide6.QtCore import Property, Signal, Slot, QObject
 
 # from .base_view_model import BaseViewModel
 from cansrv.test.mock_vm import *
-from cansrv.can_srv import CANDeviceInfo
-from cansrv.can_srv import get_can_service
+from cansrv.can_srv import CANDeviceInfo, CANService
 # from canapp.data_object import DeviceInfoLine
 from lw.srv_event import SrvEvent
 from PySide6.QtCore import (
@@ -35,7 +34,7 @@ class ListModel(QAbstractListModel):
         parent=None,
     ):
         super().__init__(parent)
-        self._items = viewmodel._available_devices
+        self._items = viewmodel.available_devices
 
     def rowCount(
         self,
@@ -77,66 +76,72 @@ class ListModel(QAbstractListModel):
 class ChannelViewModel(QObject, ScannerVM):
     deviceStateChanged = Signal()
 
-    def __init__(self):
+    def __init__(self, can_service: CANService):
         super().__init__()
-        self._can_service = get_can_service()
-        self._available_devices: list[CANDeviceInfo] = []
+        if can_service is None:
+            raise TypeError("ChannelViewModel requires a CANService instance")
+        self._can_service = can_service
+        #file_srv.subscribe_any(vm.on_status_callback)
+        can_service.subscribe(self.on_status_callback)
+        #self._available_devices: list[CANDeviceInfo] = []
         self._cbx_model = ListModel(self)
-        self._acquired_devices: list[CANDeviceInfo] = []
+        #self._acquired_devices: list[CANDeviceInfo] = []
 
-    def on_scan_status(self, payload: SrvEvent) -> None:
-        super().on_scan_status(payload)
-        if isinstance(payload, ScanDevicePluggedStatus):
-            # NOTE: avoid duplicate add when repeated plug notifications arrive
-            if payload.device_info not in self._available_devices:
-                self._available_devices.append(payload.device_info)
-            return
+    # @property
+    # def acquired_devices(self) -> list[CANDeviceInfo]:
+    #     return self._acquired_devices
 
-        if isinstance(payload, ScanDeviceUnpluggedStatus):
-            device = payload.device_info
+    # def on_status_callback(self, payload: SrvEvent) -> None:
+    #     super().on_status_callback(payload)
+    #     if isinstance(payload, ScanDevicePluggedStatus):
+    #         # NOTE: avoid duplicate add when repeated plug notifications arrive
+    #         if payload.device_info not in self._available_devices:
+    #             self._available_devices.append(payload.device_info)
+    #         return
 
-            self._available_devices = [
-                d for d in self._available_devices
-                if d.device_id != device.device_id
-            ]
+    #     if isinstance(payload, ScanDeviceUnpluggedStatus):
+    #         device = payload.device_info
 
-            self._acquired_devices = [
-                d for d in self._acquired_devices
-                if d.device_id != device.device_id
-            ]
-            return
+    #         self._available_devices = [
+    #             d for d in self._available_devices
+    #             if d.device_id != device.device_id
+    #         ]
 
-        if isinstance(payload, ScanChannelAcquiredStatus):
-            device = payload.device_info
-            self._available_devices.remove(device)
-            self._acquired_devices.append(device)
-            return
+    #         self._acquired_devices = [
+    #             d for d in self._acquired_devices
+    #             if d.device_id != device.device_id
+    #         ]
+    #         return
 
-        if isinstance(payload, ScanChannelReleasedStatus):
-            device = payload.device_info
-            self._acquired_devices.remove(device)
-            self._available_devices.append(device)
-            return
+    #     if isinstance(payload, ScanChannelAcquiredStatus):
+    #         device = payload.device_info
+    #         self._available_devices.remove(device)
+    #         self._acquired_devices.append(device)
+    #         return
+
+    #     if isinstance(payload, ScanChannelReleasedStatus):
+    #         device = payload.device_info
+    #         self._acquired_devices.remove(device)
+    #         self._available_devices.append(device)
+    #         return
             
     @Slot(object, result=bool)
     def acquireDevice(
         self,
         device: CANDeviceInfo,
-    ) -> bool:
-        return bool(
-            self._can_service.acquire(device)
-        )
+    ):
+        return self._can_service.acquire(device)
 
     @Slot(object)
-    def releaseDevice(self, device: CANDeviceInfo) -> None:
-        self._can_service.release(device)
+    def releaseDevice(self, device: CANDeviceInfo):
+        return self._can_service.release(device)
 
     """ Vendor list box"""
     @property
     def vendor_list(self) -> list[str]:
         vendors = {
             dev.vendor
-            for dev in (*self._available_devices, *self._acquired_devices)
+            for dev in (*self.available_devices, *self.acquired_devices)
         }
         return sorted(vendors)
 
@@ -145,7 +150,7 @@ class ChannelViewModel(QObject, ScannerVM):
     def all_device_status(self) -> list[DeviceInfoLine]:
         lines: list[DeviceInfoLine] = []
 
-        for dev in self._available_devices:
+        for dev in self.available_devices:
             lines.append(
                 DeviceInfoLine(
                     device=dev,
@@ -153,7 +158,7 @@ class ChannelViewModel(QObject, ScannerVM):
                 )
             )
 
-        for dev in self._acquired_devices:
+        for dev in self.acquired_devices:
             lines.append(
                 DeviceInfoLine(
                     device=dev,
@@ -168,5 +173,5 @@ class ChannelViewModel(QObject, ScannerVM):
     def available_device_lists(self) -> list[str]:
         return [
             str(dev.device_id)
-            for dev in self._available_devices
+            for dev in self.available_devices
         ]

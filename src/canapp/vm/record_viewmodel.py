@@ -5,24 +5,33 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import Signal, Slot, QTimer, QObject
 
 # from .base_view_model import BaseViewModel
-from cansrv.test.mock_vm import ScannerVM
-from fs_test.mock_vm import RecordModel, RecorderStatusEvent
+from cansrv.test.mock_vm import ScannerVM,ReceiverVM
+from cansrv.test.mock_vm import RecordIdEvent, RecorderStatusEvent
 from canapp.vm.data_object import CANLogLine
-from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, CANDBInfo
+from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, CANDBInfo, FileService
 from cansrv.status import RecorderStatus
 from lw.logger_setup import setup_logger, LOG
 from canapp.vm.data_object import CANLogLine, DecodedSignalLine
+from lw.qt.qtobject_adapter import QtViewModelBase
+from cansrv.can_srv import CANService
+from lw.srv_event import SrvEvent
 
-class RecordViewModel(QObject, RecordModel, ScannerVM):
+class RecordViewModel(QtViewModelBase, ScannerVM, ReceiverVM):
     recordingChanged = Signal()
     stateChanged = Signal()
     progressChanged = Signal()
 
-    def __init__(self):
+    def __init__(self, file_srv: FileService, can_srv: CANService):
         super().__init__()
+        self.init_mixins(ScannerVM, ReceiverVM)
 
+        self.file_srv = file_srv
+        self.can_srv = can_srv
+        """20260728 BUG: Forget to subscribe => bug not call to callback function """
+        #file_srv.subscribe_any(self.on_status_callback)
+        can_srv.subscribe(self.on_status_callback)
         self._record_id: LogId | None = None
-        self._is_play: bool = False
+        #self._is_play: bool = False
 
         self._row = 0
         self._metadata: MetaDataStorageInterface | None = None
@@ -52,23 +61,31 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
         Oneway to detect the state changed is using setter property and also other place use it.
     """
     @record_id.setter
-    def record_id(self, value: LogId | None) -> None:
+    def record_id(self, value: LogId) -> None:
         if self._record_id == value:
             return
         self._record_id = value
+
+        assert value is not None
+        """ BUG: sqlite3_exec rc=5 sqlite_msg=database is locked"""
+        self._metadata = MetaDataStorageInterface(value.path_token(), read_only=True)
+        
         self.recordingChanged.emit()
 
-    @property
-    def is_play(self) -> bool:
-        return self._is_play
+    # @property
+    # def is_play(self) -> bool:
+    #     return self._is_play
 
-    @is_play.setter
-    def is_play(self, value: bool) -> None:
-        if self._is_play == value:
-            return
-        self._is_play = value
-        self.recordingChanged.emit()
-        self.stateChanged.emit()
+    # @is_play.setter
+    # def is_play(self, value: bool) -> None:
+    #     if self._is_play == value:
+    #         return
+
+    #     self._timer.start() if value else self._timer.stop()
+
+    #     self._is_play = value
+    #     self.recordingChanged.emit()
+    #     self.stateChanged.emit()
 
     # @property
     # def autoFetch(self):
@@ -83,27 +100,27 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
     #     self.recordingChanged.emit()
 
     """ The only place the state changed """
-    def on_recorder_status(self, event: RecorderStatusEvent):
-        RecordModel.on_recorder_status(event)
-        status = RecorderStatus(int(event.status))
-        is_play = False
-        record_id = event.log_id
-        if status == RecorderStatus.STOPPED:
-            assert record_id is None
-            is_play = False
-            self._timer.stop()
-        elif status == RecorderStatus.STARTED:
-            # NOTE: Event status changed
-            assert record_id is not None
-            self.metadata = MetaDataStorageInterface(record_id.path_token())
-            self._timer.start()
-            is_play = True
-        self.is_play = is_play
-        self.record_id = event.log_id
+    def on_status_callback(self, event: SrvEvent):
+        super().on_status_callback(event)
+        # status = RecorderStatus(int(event.status))
+        # is_play = False
+        #record_id = event.log_id
+        #if status == RecordIdEvent:
+            # assert record_id is None
+            #is_play = False
+            #self._timer.stop()
+        # elif status == RecorderStatus.STARTED:
+        #     # NOTE: Event status changed
+        #     assert record_id is not None
+        #     #self._timer.start()
+        #     is_play = True
+        #self.is_play = is_play
+        if isinstance(event, RecordIdEvent):
+            self.record_id = event.record_id
 
-    @property
-    def isRecording(self) -> bool:
-        return self.is_play
+    # @property
+    # def isRecording(self) -> bool:
+    #     return self.is_play
 
     @property
     def is_having_record(self) -> bool:
@@ -113,13 +130,13 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
     def is_empty_record(self) -> bool:
         return self.record_id is None
 
-    @Slot()
-    def startNewRecording(self) -> None:
-        get_file_service().start_recording()
+    # @Slot()
+    # def startNewRecording(self):
+    #     return self.file_srv.start_recording()
 
-    @Slot()
-    def stopRecording(self) -> None:
-        get_file_service().stop_recording()
+    # @Slot()
+    # def stopRecording(self):
+    #     return self.file_srv.stop_recording()
 
     @Slot(int, result=bool)
     def saveRecord(self, name: str = "") -> bool:
@@ -152,16 +169,13 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
     @property
     def entry(self) -> CANLogLine | None:
         if self._metadata is None:
+            LOG.debug("self._metadata is None")
             return None
         
-        # if self._filter.empty():
-        #     view_browser = self._metadata.browse_all()
-        # else:
-        #     view_browser = self._metadata.browse(self._filter.to_query())
-
         view_browser = self._metadata.browse_all()
 
         if not 0 <= self._row < view_browser.size():
+            LOG.debug("not 0 <= self._row < view_browser.size()")
             return None
 
         row = view_browser.at(
@@ -172,98 +186,100 @@ class RecordViewModel(QObject, RecordModel, ScannerVM):
             data_model=row,
         )
 
-        db: CANDBInfo | None = None
+        # db: CANDBInfo | None = None
 
-        if self.dbc_id is not None:
-            db = get_file_service().get_candb_data(
-                self.dbc_id
-            )
+        # if self.dbc_id is not None:
+        #     db = self.file_srv.get_candb_data(
+        #         self.dbc_id
+        #     )
             
-        if db is not None:
-            result = db.decode_message(
-                line.can_id,
-                line.data,
-            )
-            message_def = (
-                db.get_message_by_frame_id(
-                    line.can_id
-                )
-            )
+        # if db is not None:
+        #     result = db.decode_message(
+        #         line.can_id,
+        #         line.data,
+        #     )
+        #     message_def = (
+        #         db.get_message_by_frame_id(
+        #             line.can_id
+        #         )
+        #     )
 
-            decoded_signals: list[
-                DecodedSignalLine
-            ] = []
+        #     decoded_signals: list[
+        #         DecodedSignalLine
+        #     ] = []
 
-            if (
-                isinstance(result, dict)
-                and message_def is not None
-            ):
-                for sig_name, sig_value in result.items():
-                    sig_def = None
+        #     if (
+        #         isinstance(result, dict)
+        #         and message_def is not None
+        #     ):
+        #         for sig_name, sig_value in result.items():
+        #             sig_def = None
 
-                    try:
-                        sig_def = (
-                            message_def
-                            .get_signal_by_name(
-                                str(sig_name)
-                            )
-                        )
-                    except Exception:
-                        sig_def = None
+        #             try:
+        #                 sig_def = (
+        #                     message_def
+        #                     .get_signal_by_name(
+        #                         str(sig_name)
+        #                     )
+        #                 )
+        #             except Exception:
+        #                 sig_def = None
 
-                    raw_value = 0
+        #             raw_value = 0
 
-                    if isinstance(
-                        sig_value,
-                        bool,
-                    ):
-                        raw_value = int(
-                            sig_value
-                        )
+        #             if isinstance(
+        #                 sig_value,
+        #                 bool,
+        #             ):
+        #                 raw_value = int(
+        #                     sig_value
+        #                 )
 
-                    elif isinstance(
-                        sig_value,
-                        (int, float),
-                    ):
-                        raw_value = int(
-                            sig_value
-                        )
+        #             elif isinstance(
+        #                 sig_value,
+        #                 (int, float),
+        #             ):
+        #                 raw_value = int(
+        #                     sig_value
+        #                 )
 
-                    elif (
-                        sig_def is not None
-                        and getattr(
-                            sig_def,
-                            "choices",
-                            None,
-                        )
-                    ):
-                        for (
-                            choice_raw,
-                            choice_label,
-                        ) in sig_def.choices.items():
-                            if (
-                                str(choice_label)
-                                == str(sig_value)
-                            ):
-                                raw_value = int(
-                                    choice_raw
-                                )
-                                break
+        #             elif (
+        #                 sig_def is not None
+        #                 and getattr(
+        #                     sig_def,
+        #                     "choices",
+        #                     None,
+        #                 )
+        #             ):
+        #                 for (
+        #                     choice_raw,
+        #                     choice_label,
+        #                 ) in sig_def.choices.items():
+        #                     if (
+        #                         str(choice_label)
+        #                         == str(sig_value)
+        #                     ):
+        #                         raw_value = int(
+        #                             choice_raw
+        #                         )
+        #                         break
 
-                    sig = DecodedSignalLine(
-                        raw_value=raw_value,
-                        changed=bool(
-                            line.changed
-                        ),
-                    )
+        #             sig = DecodedSignalLine(
+        #                 raw_value=raw_value,
+        #                 changed=bool(
+        #                     line.changed
+        #                 ),
+        #             )
 
-                    sig._runtime_signal_name = str(
-                        sig_name
-                    )
-                    sig._sig_info = sig_def
+        #             sig._runtime_signal_name = str(
+        #                 sig_name
+        #             )
+        #             sig._sig_info = sig_def
 
-                    decoded_signals.append(
-                        sig
-                    )
+        #             decoded_signals.append(
+        #                 sig
+        #             )
 
-            line.signals = decoded_signals
+        #     line.signals = decoded_signals
+
+        return line

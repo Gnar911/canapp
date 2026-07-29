@@ -16,6 +16,9 @@ from canapp.vm.data_object import (
     DecodedSignalLine,
 )
 from cansrv.can_srv import get_can_service
+from cansrv.file_service import get_file_service, DBCId, FileService
+from cansrv.can_srv import CANService, get_can_service
+from lw.qt.qtobject_adapter import QtViewModelBase
 # from .base_view_model import BaseViewModel
 
 """ NOTE BUG 20260720:
@@ -270,7 +273,7 @@ class FilterState:
         return FilterState()
 
 
-class LogViewModel(QObject, ParseModel, DBCModel):
+class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
     progressChanged = Signal()
 
     """ BUG: This is the common state changed, we update the trivial operation all at the same signal but this not good for
@@ -282,17 +285,29 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     logChanged = Signal(str, LogId)
 
-    def __init__(self):
-        # QObject must be initialized only once in mixed-inheritance tests.
-        if not getattr(self, "_qt_obj_initialized", False):
-            QObject.__init__(self)
-            self._qt_obj_initialized = True
+    def __init__(self, can_service: CANService, file_service: FileService):
+        self._can_service = can_service
+        self._file_service = file_service
+        file_service.subscribe_any(self.on_status_callback)
+        can_service.subscribe(self.on_status_callback)
+        # # QObject must be initialized only once in mixed-inheritance tests.
+        # if not getattr(self, "_qt_obj_initialized", False):
+        #     QObject.__init__(self)
+        #     self._qt_obj_initialized = True
 
-        # QObject does not cooperatively initialize Python dataclass mixins.
-        if not getattr(self, "_log_mixins_initialized", False):
-            ParseModel.__init__(self)
-            DBCModel.__init__(self)
-            self._log_mixins_initialized = True
+        # # QObject does not cooperatively initialize Python dataclass mixins.
+        # if not getattr(self, "_log_mixins_initialized", False):
+        #     ParseModel.__init__(self)
+        #     DBCModel.__init__(self)
+        #     self._log_mixins_initialized = True
+
+        super().__init__()
+
+        # allow injecting services in the future; keep signature simple for DI
+        self.init_mixins(
+            ParseModel,
+            DBCModel,
+        )
 
         """ Model -> View state (service data type)
         NOTE: 
@@ -424,10 +439,10 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         LOG.debug("log_id: %s", value)
         if value is None:
             self._metadata = None
-            get_can_service().unset_source()
+            self._can_service.unset_source()
         else:
             self._metadata = MetaDataStorageInterface(value.path_token())
-            get_can_service().set_source(value)
+            self._can_service.set_source(value)
 
         self._log_id = value
 
@@ -520,7 +535,7 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
     @Slot(str)
     def startParsing(self, path: str):
-        get_file_service().parse_log_file(path)
+        self._file_service.parse_log_file(path)
 
     def closeLog(self):
         self.log_id = None
@@ -650,7 +665,7 @@ class LogViewModel(QObject, ParseModel, DBCModel):
         db: CANDBInfo | None = None
 
         if self.dbc_id is not None:
-            db = get_file_service().get_candb_data(
+            db = self._file_service.get_candb_data(
                 self.dbc_id
             )
 
@@ -808,7 +823,7 @@ class LogViewModel(QObject, ParseModel, DBCModel):
 
         can_ids = self._metadata.get_metadata(MetadataType.CAN_IDS)
         candb = (
-            get_file_service().get_candb_data(self.dbc_id)
+            self._file_service.get_candb_data(self.dbc_id)
             if self.dbc_id is not None
             else None
         )
