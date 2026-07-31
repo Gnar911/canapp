@@ -316,7 +316,7 @@ class CANLogLine:
     _user_message_name: str = field(default="")
     #message_obj: Optional[Message] = field(default=None)
     """ NOTE: Qt Index Model will handle the look up index mapping for us, so do not need to store dict here."""
-    signals: list[DecodedSignalLine] = field(default=list)
+    signals: list[DecodedSignalLine] = field(default_factory=list)
     last_data: list[int] = field(default=list)
     _color_id: str = ""
 
@@ -392,9 +392,6 @@ class CANLogLine:
 
     @property
     def line_number(self) -> int:
-        row_id = getattr(self.data_model, "row_id", None)
-        if row_id is not None:
-            return int(row_id)
         return int(self.data_model.line_number)
 
     @line_number.setter

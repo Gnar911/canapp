@@ -7,7 +7,7 @@ LOG.setLevel(logging.DEBUG)
 # from file_service.record_id import RecordId
 from cansrv.file_service import FileService, get_file_service
 from cansrv.metadata_id import LogId as RecordId
-from cansrv.status import ParserStatus
+# from cansrv.status import ParserStatus
 from mock_vm import ParseModel
 from lw.test_event import wait_evaluation
 from canapp.vm.log_viewmodel import (
@@ -17,7 +17,7 @@ from canapp.vm.log_viewmodel import (
     TimeFilter,
 )
 from canapp.vm.data_object import CANLogLine
-from canapp.container import AppContainer
+from canapp.vm.container import AppContainer
 
 pytest_plugins = ["fixture"]
 
@@ -26,8 +26,6 @@ TIMEOUT_QUERY_MS = 30
 TIMEOUT = 0.8
 PARSE_TIMEOUT = 15.0
 POLL_INTERVAL = 0.1
-TEST_ASC_PATH = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1.asc"
-
 
 # @pytest.fixture
 # def app_vm() -> LogViewModel:
@@ -41,7 +39,7 @@ def container():
 @pytest.mark.parametrize(
     "file_path",
     [
-        TEST_ASC_PATH,
+        "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1.asc",
     ],
 )
 def test_05_parse_log(can_service: AppContainer, file_path: str) -> None:

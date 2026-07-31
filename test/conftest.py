@@ -2,7 +2,7 @@ import logging
 import pytest
 from dependency_injector import providers
 from typing import Generator
-from canapp.container import AppContainer
+from canapp.vm.container import AppContainer
 from lw.logger_setup import LOG
 
 LOG.setLevel(logging.DEBUG)
@@ -16,8 +16,6 @@ def container():
         1. Singleton is not created instance until first call (), it only passing the providers 
         -> the viewmodel is not created after the fixture setup vcan, it only calls channel_vm()
     """
-    c.can_service().start()
-    c.file_service().start()
 
     c.channel_vm()
     c.schedule_vm()
@@ -26,10 +24,14 @@ def container():
     c.dbc_vm()
     c.replay_vm()
 
+    c.can_service().start()
+    c.file_service().start()
+
     yield c
 
     c.can_service().stop()
     c.file_service().stop()
+    
     c.channel_vm().reset()
     c.schedule_vm().reset()
     c.record_vm().reset()

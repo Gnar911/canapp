@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 from dataclasses import dataclass
+import os
 
 from PySide6.QtCore import Signal, Slot, QTimer, QObject
 
 # from .base_view_model import BaseViewModel
 from cansrv.file_service import get_file_service, DBCId, FileService
 from cansrv.can_srv import CANService, get_can_service
-from cansrv.application_events import DBCLoadedEvent
+from cansrv.event_dispatcher import DBCLoadedEvent
+# from cansrv.application_events import DBCLoadedEvent
 from lw.srv_event import SrvEvent
 from cansrv.test.mock_vm import ParseModel, DBCModel
 from pathlib import Path
@@ -17,7 +19,8 @@ from PySide6.QtCore import (
     QModelIndex,
     QAbstractListModel,
 )
-from typing import Protocol, TypeVar, Generic
+from typing import Protocol
+from lw.logger_setup import LOG
 
 class DisplayItem(Protocol):
     @property
@@ -28,11 +31,17 @@ class DisplayItem(Protocol):
 class DbcItem(DisplayItem):
     dbc_id: DBCId
     file_path: str
-
+    
+    @property
+    def show(self) -> str:
+        #LOG.debug("show: %s",os.path.basename(self.file_path))
+        return os.path.basename(self.file_path)
+    
 @dataclass(frozen=True)
 class MessageItem(DisplayItem):
     can_id: int
     msg_name: str
+    signals: list[SignalItem]
 
     @property
     def show(self) -> str:
@@ -47,56 +56,7 @@ class SignalItem(DisplayItem):
     @property
     def show(self) -> str:
         return f"[{self.can_id:03X}] {self.msg_name} - {self.signal_name}"
-    
-T = TypeVar("T", bound=DisplayItem)
 
-class ListModel(QAbstractListModel, Generic[T]):
-    ItemRole = Qt.UserRole + 1
-
-    def __init__(
-        self,
-        items: list[T],
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._items = items
-
-    def rowCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        if parent.isValid():
-            return 0
-
-        return len(self._items)
-
-    def data(
-        self,
-        index: QModelIndex,
-        role: int = Qt.DisplayRole,
-    ):
-        if not index.isValid():
-            return None
-
-        row = index.row()
-
-        if not 0 <= row < len(self._items):
-            return None
-
-        item = self._items[row]
-
-        if role == Qt.DisplayRole:
-            return item.show
-
-        if role == self.ItemRole:
-            return item
-
-        return None
-
-    def roleNames(self):
-        return {
-            self.ItemRole: b"item",
-        }
     
 class DbcViewModel(QObject, DBCModel):
     dbcChanged = Signal()
@@ -117,21 +77,6 @@ class DbcViewModel(QObject, DBCModel):
         self._message_lists: list[MessageItem] = []
         self._signal_lists: list[SignalItem] = []
 
-        self.dbcs = ListModel[DbcItem](
-            self._items,
-            self,
-        )
-
-        self.messages = ListModel[MessageItem](
-            self._message_lists,
-            self,
-        )
-
-        self.signals = ListModel[SignalItem](
-            self._signal_lists,
-            self,
-        )
-
         self._curMessage: MessageItem | None = None
         self._curSignal: SignalItem | None = None
 
@@ -144,34 +89,27 @@ class DbcViewModel(QObject, DBCModel):
 
     """ NOTE: Selecting message, flip signals"""
     @curMessage.setter
-    def curMessage(self, value):
+    def curMessage(self, value: MessageItem):
         if self._curMessage == value:
             return
 
         self._curMessage = value
         msg = self._curMessage
-        signal_lists: list[SignalItem] = []
-        for sig in list(msg.signals):
-            signal_lists.append(
-                SignalItem(
-                    can_id=msg.frame_id,
-                    msg_name=msg.name,
-                    signal_name=sig.name,
-                )
-            )
-        self._signal_lists = signal_lists
+        self._signal_lists = msg.signals
+        self.signalSelectChanged.emit()
+
 
     @property
     def curSignal(self):
         return self._curSignal
 
     @curSignal.setter
-    def curSignal(self, value):
+    def curSignal(self, value: SignalItem):
         if self._curSignal == value:
             return
 
         self._curSignal = value
-        self.signalSelectChanged.emit()
+        #self.signalSelectChanged.emit()
 
     @property
     def msgFilter(self):
@@ -231,29 +169,36 @@ class DbcViewModel(QObject, DBCModel):
         signal_lists: list[SignalItem] = []
 
         for msg in msg_defs:
-            message_lists.append(
-                MessageItem(can_id=msg.frame_id, msg_name=msg.name)
-            )
-        for sig in list(msg_defs[0].signals):
-            signal_lists.append(
-                SignalItem(
-                    can_id=msg.frame_id,
-                    msg_name=msg.name,
-                    signal_name=sig.name,
+            signals = []
+            for sig in list(msg.signals):
+                signals.append(
+                    SignalItem(
+                        can_id=msg.frame_id,
+                        msg_name=msg.name,
+                        signal_name=sig.name,
+                    )
                 )
+
+            message_lists.append(
+                MessageItem(can_id=msg.frame_id, msg_name=msg.name, signals=signals)
             )
+
+            signal_lists.extend(signals)
 
         # NOTE: Update QT UI
         self._message_lists = message_lists
         self._signal_lists = signal_lists
 
+        self.onMessageSelect.emit()
+        self.signalSelectChanged.emit()
+
         # NOTE: new dbc load does not means the screen must display it, just add to the list
         self.dbc_id = event.dbc_id
 
     @Slot(str)
-    def loadDBC(self, db_file_path: str) -> None:
+    def loadDBC(self, db_file_path: str):
         # TODO: Could implement cache here if the same file_path and track changed
-        self._file_service.parse_dbc_file(db_file_path)
+        return self._file_service.parse_dbc_file(db_file_path)
 
     """ ui binding 
     Store selected_dbc in ViewModel

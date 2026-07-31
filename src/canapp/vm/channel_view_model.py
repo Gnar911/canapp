@@ -25,53 +25,28 @@ class DeviceInfoLine:
     is_acquired: bool
     is_disconnected: bool
 
-class ListModel(QAbstractListModel):
-    ItemRole = Qt.UserRole + 1
+    @property
+    def show(self):
+        return f"{self.vendor_name}: Channel {self.channel_name}:"
 
-    def __init__(
-        self,
-        viewmodel: ChannelViewModel,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._items = viewmodel.available_devices
+    @property
+    def status_color(self) -> str:
+        if self.is_disconnected:
+            return "red"
+        if self.is_acquired:
+            return "green"
+        if self.is_available:
+            return "orange"
+        return "gray"
 
-    def rowCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        if parent.isValid():
-            return 0
-
-        return len(self._items)
-
-    def data(
-        self,
-        index: QModelIndex,
-        role: int = Qt.DisplayRole,
-    ):
-        if not index.isValid():
-            return None
-
-        row = index.row()
-
-        if not 0 <= row < len(self._items):
-            return None
-
-        item = self._items[row]
-
-        if role == Qt.DisplayRole:
-            return item.device_id
-
-        if role == self.ItemRole:
-            return item
-
-        return None
-
-    def roleNames(self):
-        return {
-            self.ItemRole: b"item",
-        }
+    @property
+    def status_show(self):
+        if self.is_disconnected:
+            return "DISCONNECTED"
+        if self.is_acquired:
+            return "LOCKED"
+        if self.is_available:
+            return "AVAILABLE"
     
 class ChannelViewModel(QObject, ScannerVM):
     deviceStateChanged = Signal()
@@ -83,47 +58,11 @@ class ChannelViewModel(QObject, ScannerVM):
         self._can_service = can_service
         #file_srv.subscribe_any(vm.on_status_callback)
         can_service.subscribe(self.on_status_callback)
-        #self._available_devices: list[CANDeviceInfo] = []
-        self._cbx_model = ListModel(self)
-        #self._acquired_devices: list[CANDeviceInfo] = []
 
-    # @property
-    # def acquired_devices(self) -> list[CANDeviceInfo]:
-    #     return self._acquired_devices
-
-    # def on_status_callback(self, payload: SrvEvent) -> None:
-    #     super().on_status_callback(payload)
-    #     if isinstance(payload, ScanDevicePluggedStatus):
-    #         # NOTE: avoid duplicate add when repeated plug notifications arrive
-    #         if payload.device_info not in self._available_devices:
-    #             self._available_devices.append(payload.device_info)
-    #         return
-
-    #     if isinstance(payload, ScanDeviceUnpluggedStatus):
-    #         device = payload.device_info
-
-    #         self._available_devices = [
-    #             d for d in self._available_devices
-    #             if d.device_id != device.device_id
-    #         ]
-
-    #         self._acquired_devices = [
-    #             d for d in self._acquired_devices
-    #             if d.device_id != device.device_id
-    #         ]
-    #         return
-
-    #     if isinstance(payload, ScanChannelAcquiredStatus):
-    #         device = payload.device_info
-    #         self._available_devices.remove(device)
-    #         self._acquired_devices.append(device)
-    #         return
-
-    #     if isinstance(payload, ScanChannelReleasedStatus):
-    #         device = payload.device_info
-    #         self._acquired_devices.remove(device)
-    #         self._available_devices.append(device)
-    #         return
+    def on_status_callback(self, event: SrvEvent):
+        super().on_status_callback(event)
+        """ NOTE: List is updated at the parent ScannerVM but we do not have react for list so we emit manually"""
+        self.deviceStateChanged.emit()
             
     @Slot(object, result=bool)
     def acquireDevice(
@@ -153,16 +92,24 @@ class ChannelViewModel(QObject, ScannerVM):
         for dev in self.available_devices:
             lines.append(
                 DeviceInfoLine(
-                    device=dev,
-                    status="Available",
+                    str(dev.vendor),
+                    str(dev.device_id),
+                    0,
+                    True,
+                    False,
+                    False,
                 )
             )
 
         for dev in self.acquired_devices:
             lines.append(
                 DeviceInfoLine(
-                    device=dev,
-                    status="Acquired",
+                    str(dev.vendor),
+                    str(dev.device_id),
+                    0,
+                    False,
+                    True,
+                    False,
                 )
             )
 
@@ -175,3 +122,7 @@ class ChannelViewModel(QObject, ScannerVM):
             str(dev.device_id)
             for dev in self.available_devices
         ]
+
+    @property
+    def isHavingDevices(self) -> bool:
+        return len(self.all_device_status) != 0

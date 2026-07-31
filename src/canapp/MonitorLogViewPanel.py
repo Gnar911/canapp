@@ -1,4 +1,4 @@
-from can_sdk.dbc_manager import CANDBManager
+# from can_sdk.dbc_manager import CANDBManager
 # from can_sdk.connection_viewmodel import CANConnectManager, Handle
 # from can_sdk.logger_setup import LOG, setup_logger
 from typing import Optional
@@ -22,15 +22,15 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton,
     QComboBox, QApplication, QStyle, QFrame, QSizePolicy)
 from cansrv.test.mock_vm import *
-from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
-from cansrv.status import ParserStatus
+# from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
+# from cansrv.status import ParserStatus
 from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, ViewBrowser, LogQuery
 from canapp.vm.data_object import CANLogLine, DecodedSignalLine
 from typing import Literal
 from lw.logger_setup import LOG
 from lw.qt.declarative import bind
 RowId = int
-
+from PySide6.QtCore import QThread
 from PySide6.QtCore import (
     QAbstractItemModel,
     QItemSelectionModel,
@@ -56,99 +56,9 @@ from canapp.vm.record_viewmodel import (
 )
 from PySide6.QtWidgets import QTreeView, QScrollBar, QHBoxLayout
 from lw.logger_setup import LOG
+from canapp.FileLogViewPanel import LogViewModel_QtAdapter
 
-class TreeLogLazyLoadModel(QAbstractItemModel):
-    COL_TREND = 0
-    COL_LOG_MESSAGES = 1
-    COLUMN_COUNT = 2
-    TAG_FG = {
-        "normal": QColor("#FFFFFF"),
-        "change": QColor("#FFFFFF"),
-    }
-
-    def __init__(
-        self,
-        vm: RecordViewModel,
-        parent=None,
-    ):
-        super().__init__(parent)
-
-        self._vm = vm
-        self._known_rows = vm.totalRows
-
-        self._vm.recordingChanged.connect(
-            self._reevaluate
-        )
-
-        self._vm.progressChanged.connect(self._on_total_rows_changed)
-
-        """ NOTE: QML bindings automatically evaluate once when the binding is established
-                Qt Widgets do not have this automatic initial evaluation
-        """
-        self._reevaluate()
-
-
-    def _reevaluate(self) -> None:
-        self.beginResetModel()
-        self.endResetModel()
-
-    def _on_total_rows_changed(self):
-
-        new_total = self._vm.totalRows
-
-        if new_total == self._known_rows:
-            return
-
-        #
-        # rows removed
-        #
-        if new_total < self._known_rows:
-
-            self.beginRemoveRows(
-                QModelIndex(),
-                new_total,
-                self._known_rows - 1,
-            )
-
-            self._known_rows = new_total
-
-            self.endRemoveRows()
-
-            return
-
-        #
-        # rows appended
-        #
-        self.beginInsertRows(
-            QModelIndex(),
-            self._known_rows,
-            new_total - 1,
-        )
-
-        self._known_rows = new_total
-
-        self.endInsertRows()
-
-    def columnCount(
-        self,
-        parent: QModelIndex = QModelIndex(),
-    ) -> int:
-        return self.COLUMN_COUNT
-
-    def rowCount(
-        self,
-        parent=QModelIndex(),
-    ):
-        if parent.isValid():
-            obj = parent.internalPointer()
-
-            if isinstance(obj, CANLogLine):
-                return len(obj.signals)
-
-            return 0
-
-        return self._known_rows
-
+"""
     # def rowCount(
     #     self,
     #     parent: QModelIndex = QModelIndex(),
@@ -200,10 +110,88 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
 
     #     self.endInsertRows()
 
+"""
+class TreeLogLazyLoadModel(QAbstractItemModel):
+    COL_TREND = 0
+    COL_LOG_MESSAGES = 1
+    COLUMN_COUNT = 2
+    TAG_FG = {
+        "normal": QColor("#FFFFFF"),
+        "change": QColor("#FFFFFF"),
+    }
+
+    def __init__(
+        self,
+        vm: RecordViewModel,
+        parent=None,
+    ):
+        super().__init__(parent)
+
+        self._vm = vm
+        self._known_rows = vm.totalRows
+
+        self._vm.recordingChanged.connect(self._reevaluate)
+        self._vm.progressChanged.connect(self._on_total_rows_changed)
+
+        """ NOTE: QML bindings automatically evaluate once when the binding is established
+                Qt Widgets do not have this automatic initial evaluation
+        """
+        self._reevaluate()
+
+    def _reevaluate(self) -> None:
+        self.beginResetModel()
+        self.endResetModel()
+
+    def _on_total_rows_changed(self):
+        new_total = self._vm.totalRows
+        if new_total == self._known_rows:
+            return
+
+        if new_total < self._known_rows:
+            self.beginRemoveRows(
+                QModelIndex(),
+                new_total,
+                self._known_rows - 1,
+            )
+
+            self._known_rows = new_total
+
+            self.endRemoveRows()
+            return
+
+        self.beginInsertRows(
+            QModelIndex(),
+            self._known_rows,
+            new_total - 1,
+        )
+        self._known_rows = new_total
+        self.endInsertRows()
+
+    def columnCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        return self.COLUMN_COUNT
+
+    def rowCount(
+        self,
+        parent=QModelIndex(),
+    ):
+        # Flat monitor tree: top-level message rows only.
+        if parent.isValid():
+            obj = parent.internalPointer()
+
+            if isinstance(obj, CANLogLine):
+                return len(obj.signals)
+
+            return 0
+        return self._known_rows
+
     def hasChildren(
         self,
         parent: QModelIndex = QModelIndex(),
     ) -> bool:
+        #LOG.debug("hasChildren(%s)", parent.isValid())
         if not parent.isValid():
             # return (
             #     self._vm.lazyCount > 0
@@ -222,12 +210,22 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
         return False
 
     """ NOTE: We dont let the Qt to manage the row state itself, we must store it on our ViewModel"""
+    """ 20260731 BUG: 
+        In C++, QModelIndex stores an opaque pointer (internalPointer). In PySide, when you do:
+
+        self.createIndex(row, column, python_object)
+
+        Shiboken wraps the Python object, but it does not magically keep a strong reference to an object that has no other owners.    
+
+            line = Dummy(f"Row {row + 1}")
+    """
     def index(
         self,
         row: int,
         column: int,
         parent: QModelIndex = QModelIndex(),
     ) -> QModelIndex:
+        #LOG.debug("index(%d,%d,parent=%s)", row, column, parent.isValid())
         if not self.hasIndex(
             row,
             column,
@@ -236,11 +234,12 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
             return QModelIndex()
 
         if not parent.isValid():
-            self._vm.row = row
+            #self._vm.row = row
             line = self._vm.entry
+            line = self._vm.entries[row]
 
-            if line is None:
-                return QModelIndex()
+            # if line is None:
+            #     return QModelIndex()
 
             return self.createIndex(
                 row,
@@ -267,12 +266,13 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
             row,
             column,
             signal,
-        )
-
+       )
+#
     def parent(
         self,
         index: QModelIndex,
     ) -> QModelIndex:
+        #LOG.debug("parent()")
         if not index.isValid():
             return QModelIndex()
 
@@ -292,11 +292,7 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
         if parent_line is None:
             return QModelIndex()
 
-        logical_row = getattr(
-            parent_line,
-            "_logical_row",
-            None,
-        )
+        logical_row = parent_line.line_number
 
         if logical_row is None:
             return QModelIndex()
@@ -307,6 +303,8 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
             parent_line,
         )
 
+        # return QModelIndex()
+
     def data(
         self,
         index: QModelIndex,
@@ -315,11 +313,14 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
         if not index.isValid():
             return None
 
+        if role != Qt.ItemDataRole.DisplayRole:
+            return None
+
         obj = index.internalPointer()
 
         if role == Qt.ItemDataRole.DisplayRole and isinstance(obj, CANLogLine):
             if index.column() == self.COL_TREND:
-                return obj.trend
+                return ""
 
             if index.column() == self.COL_LOG_MESSAGES:
                 return obj.message_line
@@ -330,10 +331,7 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
         ):
             if index.column() == self.COL_LOG_MESSAGES:
                 return obj.signal_line
-
-        if role == Qt.ItemDataRole.ForegroundRole:
-            return None
-            
+        
         return None
 
     def flags(
@@ -383,70 +381,13 @@ class TreeLogLazyLoadModel(QAbstractItemModel):
 class MonitorLogViewPanel(QWidget):
     def __init__(
         self,
-        parent: QWidget,
-        vm: RecordViewModel
+        vm: RecordViewModel,
+        parent: QWidget = None,
     ):
         super().__init__(parent)
-
-        # self.handle: Optional[Handle] = handle
-        # self.candb = candb
-        # self.cnt_model = cnt_model
-        # self.chl_ctx: Optional[ChannelContext] = None
         self.vm = vm
-
-        # self._started_once = False
-        # self._last_progress_rows: int = -1
-        # self._last_progress_segment: int = -1
-        # self._mock_progress_rows: int = 50000
-        # self._mock_current_segment: int = 0
-        # self._bind_channel_context(self.handle)
-        # self.cnt_model.event_on_channels_state_changed.subscribe(self._on_channels_state_changed)
-
-        # runtime
-        #self._running = False
         self._build_ui()
-        self.btn_start_stop.toggled.connect(lambda: self.vm.stopRecording() 
-                                            if self.vm.isRecording else
-                                            self.vm.startNewRecording())
-        
-        bind(
-            self.vm.stateChanged,
-                self.btn_start_stop.setText,
-            lambda: "Stop" if self.vm.isRecording else "Start A Record",
-        )
 
-        #self.btn_toggle_toolbox.toggled.connect(self._on_toolbox_toggled)
-        #self.cmb_mode.currentIndexChanged.connect(self._on_mode_changed)
-
-        # toolbox button handlers (empty for now)
-        #self.btn_refresh.clicked.connect(self.on_btn_refresh_clicked)
-        #self.btn_edit.clicked.connect(self.on_btn_edit_clicked)
-        #self.btn_clear.clicked.connect(self.on_btn_clear_clicked)
-        #self.btn_save.clicked.connect(self.on_btn_save_clicked)
-
-        # self._apply_running_state(False)
-        # self._update_disconnect_overlay()
-
-    # def _bind_channel_context(self, handle: Optional[Handle]):
-    #     self.handle = handle
-    #     self.chl_ctx = self.cnt_model.get_context(handle) if handle is not None else None
-    #     self._last_progress_rows = -1
-    #     self._last_progress_segment = -1
-    #     if self.chl_ctx:
-    #         self.chl_ctx.event_on_filter_state_changed.subscribe(self.on_filter_changed)
-    #     if hasattr(self, "tree"):
-    #         self.tree.set_channel_handle(handle)
-
-    # def set_handle(self, handle: Optional[Handle]):
-    #     self._bind_channel_context(handle)
-    #     if hasattr(self, "tree"):
-    #         self.tree.set_channel_handle(handle)
-    #     self._update_disconnect_overlay()
-
-    # def on_filter_changed(self, filtered_lines: List[CANLogLine]):
-    #     if self._running:
-    #         return
-    #     self.tree.refresh_from_context()
 
     # -------------------------------------------------
     # UI
@@ -455,6 +396,50 @@ class MonitorLogViewPanel(QWidget):
         main = QVBoxLayout(self)
         main.setContentsMargins(6, 2, 6, 6)
         main.setSpacing(4)
+
+        # ---------- controls row (Start/Stop) ----------
+        ctrl_row = QWidget(self)
+        ctrl_layout = QHBoxLayout(ctrl_row)
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setSpacing(6)
+
+        self.btn_start_stop = QPushButton()
+        self.btn_start_stop.setCheckable(True)
+        self.btn_start_stop.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        ctrl_layout.addWidget(self.btn_start_stop, 1)
+
+        main.addWidget(ctrl_row)
+
+        # ---------- tree ----------
+        self.view = QTreeView(self)
+
+        self.view.setStyleSheet(
+            """
+            QTreeView::item:hover {
+                background: rgba(255, 255, 255, 12);
+            }
+            """
+        )
+        
+        self.model_ = (
+            TreeLogLazyLoadModel(
+                self.vm,
+                self,
+            )
+        )
+
+        self.view.setModel(
+            self.model_
+        )
+        main.addWidget(self.view, 1)
+
+
+
+
+
+
+
 
         # self.cmb_mode = QComboBox()
         # self.cmb_mode.addItems(["Full mode", "Compact mode"])
@@ -538,243 +523,3 @@ class MonitorLogViewPanel(QWidget):
 
         # main.addWidget(self.header_label)
         # main.addWidget(self.toolbox_container)
-
-        # ---------- controls row (Start/Stop) ----------
-        ctrl_row = QWidget(self)
-        ctrl_layout = QHBoxLayout(ctrl_row)
-        ctrl_layout.setContentsMargins(0, 0, 0, 0)
-        ctrl_layout.setSpacing(6)
-
-        self.btn_start_stop = QPushButton()
-        self.btn_start_stop.setCheckable(True)
-        self.btn_start_stop.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        ctrl_layout.addWidget(self.btn_start_stop, 1)
-
-        main.addWidget(ctrl_row)
-
-        # ---------- tree ----------
-        self.view = QTreeView(self)
-
-        self.model_ = (
-            TreeLogLazyLoadModel(
-                self.vm,
-                self,
-            )
-        )
-
-        self.view.setModel(
-            self.model_
-        )
-        main.addWidget(self.view, 1)
-
-        # self._disconnected_overlay = QFrame(self)
-        # self._disconnected_overlay.setObjectName("monitorDisconnectOverlay")
-        # self._disconnected_overlay.setStyleSheet(
-        #     "QFrame#monitorDisconnectOverlay { background: rgba(20, 20, 20, 110); }"
-        # )
-
-        # overlay_layout = QVBoxLayout(self._disconnected_overlay)
-        # overlay_layout.setContentsMargins(16, 16, 16, 16)
-        # overlay_layout.setAlignment(Qt.AlignCenter)
-
-        # self._disconnected_label = QLabel("Channel disconnected", self._disconnected_overlay)
-        # self._disconnected_label.setAlignment(Qt.AlignCenter)
-        # self._disconnected_label.setStyleSheet(
-        #     "QLabel { color: white; font-size: 18px; font-weight: 600; }"
-        # )
-        # overlay_layout.addWidget(self._disconnected_label)
-
-        # self._disconnected_overlay.hide()
-
-    # def resizeEvent(self, event):
-    #     super().resizeEvent(event)
-    #     if hasattr(self, "_disconnected_overlay"):
-    #         self._disconnected_overlay.setGeometry(self.rect())
-    #         if self._disconnected_overlay.isVisible():
-    #             self._disconnected_overlay.raise_()
-
-
-    # def _on_channels_state_changed(self, *_):
-    #     self._update_disconnect_overlay()
-
-    # def _is_channel_disconnected(self) -> bool:
-    #     if self.handle is None:
-    #         return True
-
-    #     checker = getattr(self.cnt_model, "is_channel_disconnected", None)
-    #     if checker is None:
-    #         return False
-
-    #     try:
-    #         return bool(checker(self.handle))
-    #     except TypeError:
-    #         return bool(checker())
-
-    # def _update_disconnect_overlay(self):
-    #     if not hasattr(self, "_disconnected_overlay"):
-    #         return
-    #     disconnected = self._is_channel_disconnected()
-    #     if disconnected:
-    #         self._disconnected_overlay.setGeometry(self.rect())
-    #         self._disconnected_overlay.show()
-    #         self._disconnected_overlay.raise_()
-    #     else:
-    #         self._disconnected_overlay.hide()
-
-    # -------------------------------------------------
-    # Mode / state
-    # -------------------------------------------------
-    # def _on_start_stop_toggled(self, checked: bool):
-    #     if checked:
-    #         self.start_monitor()
-    #     else:
-    #         self.stop_monitor()
-
-    # def start_monitor(self):
-    #     if self._running:
-    #         return
-
-    #     if self.handle is None or self.chl_ctx is None:
-    #         if hasattr(self, "tree"):
-    #             self.tree.stop_visual_rows_timer()
-    #         self._update_disconnect_overlay()
-    #         return
-
-    #     rx = self.cnt_model.get_receiver()
-    #     if rx is not None:
-    #         try:
-    #             rx.reset_runtime_record()
-    #         except Exception:
-    #             pass
-
-    #         try:
-    #             rx.resume()
-    #         except Exception:
-    #             pass
-
-    #     self._started_once = True
-    #     self._last_progress_rows = -1
-    #     self._last_progress_segment = -1
-    #     self._mock_progress_rows = 50000
-    #     self._mock_current_segment = 0
-    #     self.tree.refresh_from_context()
-    #     self.tree.start_visual_rows_timer()
-
-    #     self._running = True
-    #     self.btn_start_stop.setText("Stop Record")
-    #     self.header_label.setText("Monitor (Running)")
-    #     self._apply_running_state(True)
-
-    # def stop_monitor(self):
-    #     if not self._running:
-    #         if hasattr(self, "tree"):
-    #             self.tree.stop_visual_rows_timer()
-    #         return
-
-    #     rx = self.cnt_model.get_receiver() if self.handle is not None else None
-    #     if rx is not None:
-    #         try:
-    #             rx.pause()
-    #         except Exception:
-    #             pass
-
-    #     self._running = False
-    #     self.tree.stop_visual_rows_timer()
-    #     self.btn_start_stop.setText("Start A Record")
-    #     self.header_label.setText("Monitor (Stopped)")
-    #     if self._is_compact_mode():
-    #         self.cmb_mode.setCurrentIndex(0)
-    #     self._apply_running_state(False)
-
-    # def _apply_running_state(self, running: bool):
-    #     # Toolbox rules:
-    #     # - Only available when STOP
-    #     # - The ▼ toggle is only meaningful when STOP
-    #     self.btn_toggle_toolbox.setEnabled(not running)
-    #     self.display_group.setVisible(running)
-
-    #     if running:
-    #         self.toolbox_tools.setVisible(False)
-    #     else:
-    #         # restore toolbox visibility by toggle state
-    #         self.toolbox_tools.setVisible(self.btn_toggle_toolbox.isChecked())
-
-    # def _on_toolbox_toggled(self, checked: bool):
-    #     # Only when stopped
-    #     if self._running:
-    #         return
-    #     self.toolbox_tools.setVisible(checked)
-    #     self.btn_toggle_toolbox.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
-
-    # def _on_mode_changed(self, _):
-    #     if self._is_full_mode():
-    #         self.tree.enable_auto_scroll()
-    #     else:
-    #         self.tree.disable_auto_scroll()
-    #     self.tree.refresh_from_context()
-
-
-    # def _poll_and_render(self):
-    #     rx = self.cnt_model.get_receiver() if self.handle is not None else None
-    #     if rx is not None:
-    #         try:
-    #             _ = rx.get_disk_logfile()
-    #             # progress_rows, current_segment = disk_file.get_progress_index()
-    #             # MOCK for testability:
-    #             progress_rows = self._mock_progress_rows
-    #             current_segment = self._mock_current_segment
-    #             self._mock_progress_rows += 1000
-    #             progress_rows = max(0, int(progress_rows))
-    #             current_segment = int(current_segment)
-
-    #             # Idle ticks: do nothing to avoid accumulating UI work/CPU.
-    #             if (
-    #                 progress_rows == self._last_progress_rows
-    #                 and current_segment == self._last_progress_segment
-    #             ):
-    #                 return
-
-    #             self._last_progress_rows = progress_rows
-    #             self._last_progress_segment = current_segment
-
-    #             LOG.debug(
-    #                 f"[MONITOR][POLL] progress_rows={progress_rows}, "
-    #                 #f"segment={current_segment}, "
-    #                 #f"progress_path={_.progress_mmap_path}"
-    #             )
-    #         except Exception as e:
-    #             LOG.debug(f"[MONITOR][POLL] progress_rows read failed: {e}")
-
-    # def _is_full_mode(self) -> bool:
-    #     return self.cmb_mode.currentIndex() == 0
-
-    # def _is_compact_mode(self) -> bool:
-    #     return self.cmb_mode.currentIndex() == 1
-
-    # -------------------------------------------------
-    # Toolbox button handlers (EMPTY for now)
-    # -------------------------------------------------
-    # def on_btn_refresh_clicked(self):
-    #     # TODO implement later
-    #     LOG.debug("Refresh clicked (TODO)")
-    #     if self._running:
-    #         return
-
-    # def on_btn_edit_clicked(self):
-    #     # TODO implement later
-    #     LOG.debug("Edit clicked (TODO)")
-    #     if self._running:
-    #         return
-
-    # def on_btn_clear_clicked(self):
-    #     # TODO implement later
-    #     LOG.debug("Clear clicked (TODO)")
-    #     if self._running:
-    #         return
-
-    # def on_btn_save_clicked(self):
-    #     # TODO implement later
-    #     LOG.debug("Save clicked (TODO)")
-    #     if self._running:
-    #         return

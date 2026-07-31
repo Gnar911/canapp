@@ -23,7 +23,7 @@ class AppContainer(ServiceContainer):
         main_dispatcher=dispatcher,
     )
 
-    can_service = providers.Singleton(CANService)
+    can_service = providers.Singleton(CANService, main_dispatcher=dispatcher,)
 
     """ NOTE: Using Factory if many instances, using Singleton if only one"""
     """ NOTE: Factory returns a new VM each call.

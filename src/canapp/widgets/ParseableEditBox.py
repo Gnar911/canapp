@@ -1,5 +1,5 @@
 from typing import Optional
-from ui_sdk.components.pyqt.basic_component.ComboboxSearch import ComboBoxSearch
+# from ui_sdk.components.pyqt.basic_component.ComboboxSearch import ComboBoxSearch
 from lw.logger_setup import LOG
 from PySide6.QtWidgets import (
     QWidget, QGroupBox, QVBoxLayout, QLabel, QPushButton, QSizePolicy, QToolBox,

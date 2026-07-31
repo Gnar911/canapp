@@ -13,7 +13,7 @@ from canapp.vm.replay_view_model import (
 from canapp.vm.log_viewmodel import (
     LogViewModel,
 )
-from canapp.container import AppContainer
+from canapp.vm.container import AppContainer
 
 LOG.setLevel(logging.DEBUG)
 

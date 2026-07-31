@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List, Any
 from PySide6.QtCore import Signal, Slot, QTimer, QObject
+from os import PathLike, fspath
 from dataclasses import dataclass, replace
 from copy import deepcopy
 from PySide6.QtCore import (
@@ -43,8 +44,8 @@ cansrv was installed with setuptools' strict editable mode, which writes a .pth 
 import __editable___cansrv_0_1_0_finder; __editable___cansrv_0_1_0_finder.install()
 """
 from cansrv.test.mock_vm import *
-from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
-from cansrv.status import ParserStatus
+# from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
+# from cansrv.status import ParserStatus
 from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, CANDBInfo, ViewBrowser, LogQuery
 from cansrv.module.fs_core import MetadataType
 from canapp.vm.data_object import CANLogLine, DecodedSignalLine
@@ -345,27 +346,6 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
         self._editable_mode: bool = False
         #self._undo_filter: bool = True
 
-    # @property
-    # def treeModel(self):
-    #     return self.tree_model_
-    
-    # @property
-    # def lazyModel(self):
-    #     return self.lazy_model_
-    
-    # @property
-    # def undoFilter(self):
-    #     return self._undo_filter
-
-    # @undoFilter.setter
-    # def undoFilter(self, value):
-    #     if self._undo_filter == value:
-    #         return
-
-    #     self._undo_filter = value
-    #     self.commonStateChanged.emit()
-    #     self.browseChanged.emit()
-
     @property
     def pageNum(self):
         return self._page_num
@@ -427,7 +407,7 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
         return self._log_id
 
     @log_id.setter
-    def log_id(self, value: LogId):
+    def log_id(self, value: LogId | None):
 
         """ 20262107 BUG: if 2 callback has the same log_id -> it not re-evaluate -> log_id only can only describe 2 state, start(done) and fail
                 while the state and done should also have been distinguigh
@@ -448,7 +428,6 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
 
         self.commonStateChanged.emit()
         self.browseChanged.emit()
-        # doc = LogDocument(title=self.defaultLogName, log_id=value)
         self.logChanged.emit(self.defaultLogName, value)
 
     @property
@@ -486,40 +465,44 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
         self.commonStateChanged.emit()
         self.browseChanged.emit()
 
-    """ Transition state change to done or failed, calback funcion for all the viewmodels"""
-    def on_parser_status(self, event: ParserStatusEvent):
-        ParseModel.on_parser_status(self, event)
-        status = ParserStatus(int(event.status))
-        log_id = event.log_id
+    def on_status_callback(self, event: SrvEvent):
+        super().on_status_callback(event)
 
-        """ BUG: """
-        if status == ParserStatus.STARTED:
-            if log_id is not None:
-                # metadata = MetaDataStorageInterface(log_id.path_token())
-                srv_feedback = False
-                #self._timer.start()
-                #self._log_ids.append(log_id)
-            else:
-                raise ValueError
-        elif status == ParserStatus.FAILED:
-            assert log_id is None
-            srv_feedback = True
-            #self._timer.stop()
-        elif status == ParserStatus.DONE:
-            assert log_id is not None
-            srv_feedback = True
-            #self._timer.stop()
+        if isinstance(event, ParserStatusEvent):
+            # """ Transition state change to done or failed, calback funcion for all the viewmodels"""
+            # def on_parser_status(self, event: ParserStatusEvent):
+            # ParseModel.on_parser_status(self, event)
+            status = ParserStatus(int(event.status))
+            log_id = event.log_id
 
-        self.log_id = log_id
-        self.srv_feedback = srv_feedback
+            """ BUG: """
+            if status == ParserStatus.STARTED:
+                if log_id is not None:
+                    # metadata = MetaDataStorageInterface(log_id.path_token())
+                    srv_feedback = False
+                    #self._timer.start()
+                    #self._log_ids.append(log_id)
+                else:
+                    raise ValueError
+            elif status == ParserStatus.FAILED:
+                assert log_id is None
+                srv_feedback = True
+                #self._timer.stop()
+            elif status == ParserStatus.DONE:
+                assert log_id is not None
+                srv_feedback = True
+                #self._timer.stop()
 
+            self.log_id = log_id
+            self.srv_feedback = srv_feedback
 
-    def on_dbc_loaded(self, event: DBCLoadedEvent):
-        DBCModel.on_dbc_model_loaded(event=event)
-        self.dbc_id = event.dbc_id
+        if isinstance(event, DBCLoadedEvent):
+        # def on_dbc_loaded(self, event: DBCLoadedEvent):
+        #     DBCModel.on_dbc_model_loaded(event=event)
+            self.dbc_id = event.dbc_id
             
     """ Transition state change to running or idle"""
-    # @Slot(str)
+    """ @Slot(str)
     # def startParsing(self, path: str):
     #     log_id = get_file_service().parse_log_file(path)
     #     if log_id is None:
@@ -530,12 +513,12 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
     #         self._metadata = MetaDataStorageInterface(log_id.path_token())
     #         self._timer.start()
         
-    #     """ NOTE Notify state change here"""
+    #     NOTE Notify state change here
     #     self.log_id = log_id
-
+    """
     @Slot(str)
-    def startParsing(self, path: str):
-        self._file_service.parse_log_file(path)
+    def startParsing(self, path: str | PathLike[str]):
+        return self._file_service.parse_log_file(fspath(path))
 
     def closeLog(self):
         self.log_id = None
@@ -605,7 +588,7 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
         if isinstance(value, MsgFilter):
             self._filter = replace(
                 self._filter,
-                message=[value],
+                message=self._filter.message + [value],
             )
 
         elif isinstance(value, SigFilter):
@@ -614,10 +597,11 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
                 signal=[value],
             )
 
-        elif isinstance(value, Literal["Rx", "Tx"] | None ):
+        elif value is None or value in ("Rx", "Tx"):
+            # `direction` is a single value (or None) in FilterState
             self._filter = replace(
                 self._filter,
-                direction=[value],
+                direction=value,
             )
 
         elif isinstance(value, ChannelFilter):
@@ -635,27 +619,12 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
         self.commonStateChanged.emit()
         self.browseChanged.emit()
 
-    # @property
-    # def directionFilter(self):
-    #     return self._filter.direction
-
-    # @directionFilter.setter
-    # def directionFilter(self, value: DirectionFilter | NoFilter):
-    #     self._filter = replace(
-    #         self._filter,
-    #         direction=value,
-    #     )
-    #     # self._lazy_count = 0
-
-    #     """ NOTE: This is for re-evaluate all the visible rows with new ViewBrowser instance """
-    #     self.commonStateChanged.emit()
-    #     self.browseChanged.emit()
 
     """ NOTE: Page load version"""
     @property
     def entries(self) -> list[CANLogLine]:
         if self._metadata is None:
-            return None
+            return []
         
         if self._filter.empty():
             view_browser = self._metadata.browse_all()
@@ -693,101 +662,101 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
                 data_model=row,
             )
 
-            if db is not None:
-                try:
-                    result = db.decode_message(
-                        line.can_id,
-                        line.data,
-                    )
-                    message_def = (
-                        db.get_message_by_frame_id(
-                            line.can_id
-                        )
-                    )
+            # if db is not None:
+            #     try:
+            #         result = db.decode_message(
+            #             line.can_id,
+            #             line.data,
+            #         )
+            #         message_def = (
+            #             db.get_message_by_frame_id(
+            #                 line.can_id
+            #             )
+            #         )
 
-                    decoded_signals: list[
-                        DecodedSignalLine
-                    ] = []
+            #         decoded_signals: list[
+            #             DecodedSignalLine
+            #         ] = []
 
-                    if (
-                        isinstance(result, dict)
-                        and message_def is not None
-                    ):
-                        for sig_name, sig_value in result.items():
-                            sig_def = None
+            #         if (
+            #             isinstance(result, dict)
+            #             and message_def is not None
+            #         ):
+            #             for sig_name, sig_value in result.items():
+            #                 sig_def = None
 
-                            try:
-                                sig_def = (
-                                    message_def
-                                    .get_signal_by_name(
-                                        str(sig_name)
-                                    )
-                                )
-                            except Exception:
-                                sig_def = None
+            #                 try:
+            #                     sig_def = (
+            #                         message_def
+            #                         .get_signal_by_name(
+            #                             str(sig_name)
+            #                         )
+            #                     )
+            #                 except Exception:
+            #                     sig_def = None
 
-                            raw_value = 0
+            #                 raw_value = 0
 
-                            if isinstance(
-                                sig_value,
-                                bool,
-                            ):
-                                raw_value = int(
-                                    sig_value
-                                )
+            #                 if isinstance(
+            #                     sig_value,
+            #                     bool,
+            #                 ):
+            #                     raw_value = int(
+            #                         sig_value
+            #                     )
 
-                            elif isinstance(
-                                sig_value,
-                                (int, float),
-                            ):
-                                raw_value = int(
-                                    sig_value
-                                )
+            #                 elif isinstance(
+            #                     sig_value,
+            #                     (int, float),
+            #                 ):
+            #                     raw_value = int(
+            #                         sig_value
+            #                     )
 
-                            elif (
-                                sig_def is not None
-                                and getattr(
-                                    sig_def,
-                                    "choices",
-                                    None,
-                                )
-                            ):
-                                for (
-                                    choice_raw,
-                                    choice_label,
-                                ) in sig_def.choices.items():
-                                    if (
-                                        str(choice_label)
-                                        == str(sig_value)
-                                    ):
-                                        raw_value = int(
-                                            choice_raw
-                                        )
-                                        break
+            #                 elif (
+            #                     sig_def is not None
+            #                     and getattr(
+            #                         sig_def,
+            #                         "choices",
+            #                         None,
+            #                     )
+            #                 ):
+            #                     for (
+            #                         choice_raw,
+            #                         choice_label,
+            #                     ) in sig_def.choices.items():
+            #                         if (
+            #                             str(choice_label)
+            #                             == str(sig_value)
+            #                         ):
+            #                             raw_value = int(
+            #                                 choice_raw
+            #                             )
+            #                             break
 
-                            sig = DecodedSignalLine(
-                                raw_value=raw_value,
-                                changed=bool(
-                                    line.changed
-                                ),
-                            )
+            #                 sig = DecodedSignalLine(
+            #                     raw_value=raw_value,
+            #                     changed=bool(
+            #                         line.changed
+            #                     ),
+            #                 )
 
-                            sig._runtime_signal_name = str(
-                                sig_name
-                            )
-                            sig._sig_info = sig_def
+            #                 sig._runtime_signal_name = str(
+            #                     sig_name
+            #                 )
+            #                 sig._sig_info = sig_def
 
-                            decoded_signals.append(
-                                sig
-                            )
+            #                 decoded_signals.append(
+            #                     sig
+            #                 )
 
-                    line.signals = decoded_signals
+            #         line.signals = decoded_signals
 
-                except Exception as e:
-                    LOG.exception(
-                        "Decode failed: %s",
-                        e,
-                    )
+            #     except Exception as e:
+            #         LOG.exception(
+            #             "Decode failed: %s",
+            #             e,
+            #         )
 
             pending = self.editingLine.get(
                 int(line.line_number)
@@ -798,8 +767,6 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
                 if pending is not None
                 else line
             )
-
-            # LOG.debug("Row num: %s", row.line_number)
 
         return lines
 

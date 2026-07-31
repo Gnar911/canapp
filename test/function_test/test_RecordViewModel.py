@@ -18,7 +18,7 @@ from canapp.vm.schedule_view_model import (
 from canapp.vm.replay_view_model import (
     ReplayViewModel,
 )
-from canapp.container import AppContainer
+from canapp.vm.container import AppContainer
 
 def test_record_view_model_call_vm_functions(
     setup_vcan_devices: tuple[AppContainer, int],
@@ -37,15 +37,18 @@ def test_record_view_model_call_vm_functions(
     parsed.data_len = 8
     parsed.direction = 1          # RX or TX depending on your enum
     parsed.timestamp = 1.234567   # seconds
-    entry = CANPlayEntry(device_info=device, entry=parsed, initial_periodic=500.0)
+
+    """ NOTE: this 500.0 is 500 seconds, and it cost 1 day to debug it !!!!!!!!!11"""
+    entry = CANPlayEntry(device_info=device, entry=parsed, initial_periodic_second=0.5)
 
     # 2: User press send button on send panel
     app.schedule_vm().wait_ready(lambda: app.schedule_vm().sendMsgLoop(entry))
 
     # 6: The send loop process keep running at the background for 3 seconds
-    time.sleep(3.0)
-    display_entry = wait_evaluation(lambda: app.record_vm().entry, max_ms=16.7, name= "entry eval")
-    assert display_entry is not None
+    time.sleep(20.0)
+    # display_entry = wait_evaluation(lambda: app.record_vm().entry, max_ms=16.7, name= "entry eval")
+    # assert display_entry is not None
+    assert app.record_vm().totalRows > 5
 
     # 7: User back and press pause send
     app.schedule_vm().wait_ready(lambda: app.schedule_vm().pauseMsg(entry))

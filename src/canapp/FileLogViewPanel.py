@@ -709,19 +709,30 @@ class FileLogViewPanel(QGroupBox):
         self.btn_toggle_toolbox.toggled.connect(self._toggle_toolbox)
         self.btn_open_log.clicked.connect(self._on_open_log_clicked)
         self.btn_open_folder.clicked.connect(self._on_open_folder_clicked)
-        self.btn_refresh.clicked.connect(
-            lambda: setattr(self.vm, "messageFilter", NoFilter()))
-        # self.btn_play.clicked.connect(self._on_play_pause_clicked)
-        # self.btn_pause.clicked.connect(self._on_play_pause_clicked)
+        self.btn_refresh.clicked.connect(lambda: setattr(self.vm, "messageFilter", NoFilter()))
         self.btn_edit.clicked.connect(self._on_edit_clicked)
         self.btn_delete.clicked.connect(lambda: self.vm.closeLog())
-
         self.vm.logChanged.connect(
             lambda title, log_id: (
-                self.log_selector.findData(log_id) == -1
-                and self.log_selector.addItem(title, log_id)
-            )
+                self.log_selector.clear(),
+                self.log_selector.addItem(title, log_id),
+                self.log_selector.setCurrentIndex(0),
+            )[-1]
         )
+
+        self.vm.progressChanged.connect(
+            lambda: (
+                [
+                    self.page_selector.addItem(str(i + 1), i)
+                    for i in range(
+                        self.page_selector.count(),
+                        self.vm.totalPages,
+                    )
+                ],
+            )[-1]
+        )
+
+
 
     # -------------------------------------------------
     # UI
@@ -897,9 +908,9 @@ class FileLogViewPanel(QGroupBox):
             True
         )
 
-        self.view.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        # self.view.setVerticalScrollBarPolicy(
+        #     Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        # )
 
 
         self.view.setStyleSheet(
@@ -925,14 +936,14 @@ class FileLogViewPanel(QGroupBox):
             self.view
         )
 
-        self.scrollbar = QScrollBar(
-            Qt.Orientation.Vertical,
-            self,
-        )
+        # self.scrollbar = QScrollBar(
+        #     Qt.Orientation.Vertical,
+        #     self,
+        # )
 
-        layout.addWidget(
-            self.scrollbar
-        )
+        # layout.addWidget(
+        #     self.scrollbar
+        # )
 
         main.addLayout(layout, 1)
 
@@ -979,7 +990,7 @@ class FileLogViewPanel(QGroupBox):
         )
         if not file_path:
             return
-        self.vm.startParsing(file_path=file_path)
+        self.vm.startParsing(path=file_path)
 
     @Slot()
     def _on_open_folder_clicked(self):
@@ -1070,51 +1081,3 @@ class FileLogViewPanel(QGroupBox):
     #     #self.update_ui_tree_log_view(ctx)
 
     #     return self.log_view.focus_message_row(relative_row)
-
-# if __name__ == "__main__":
-#     import sys
-#     from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton
-#     from PySide6.QtCore import Qt
-#     setup_logger(env="DEV", backup_count=30)
-#     app = QApplication(sys.argv)
-#     win = QWidget()
-#     win.setWindowTitle("TreeLogTable Test")
-#     layout = QVBoxLayout(win)
-#     candb = CANDBManager()
-#     candb.load_database("/home/gnar911/Desktop/20260122 APP WEBSITE - CAN ANALYZER 3.0 CBCM TOOL APP ARC/CAN_Analyzer_MVVM/Database/EEA10_CANFD_R00c_withADAS_Main.dbc")
-#     FILELOG = "/home/gnar911/Desktop/2025-02-11_11-14-53_仕様情報切替 1_x1000.asc"
-#     ctx = LogContextManager()
-#     tree = FileLogViewPanel(parent=win, candb =candb, vm= ctx)
-#     layout.addWidget(tree)
-
-#     """ Test case 1: After done verify file log -> create a context for it, start parsing log async """
-#     #clm.start_log_verification(FILELOG_BIG)
-
-#     focus_btn = QPushButton("Focus next row")
-#     focus_btn.setToolTip("10 -> 100 -> 1000 -> ... -> 10000 -> 21000 -> 31000 -> ...")
-#     layout.addWidget(focus_btn)
-
-#     click_state = {"count": 0}
-
-#     def _next_target_row() -> int:
-#         click_state["count"] += 1
-#         step = click_state["count"]
-#         if step == 1:
-#             return 10
-#         if step == 2:
-#             return 100
-#         if step <= 12:
-#             return (step - 2) * 1000
-#         return 21000 + (step - 13) * 10000
-
-#     def _on_focus_btn_clicked():
-#         target_row = _next_target_row()
-#         ok = tree.focus_message_line_number(target_row)
-#         LOG.info(f"focus row requested={target_row}, success={ok}")
-
-#     focus_btn.clicked.connect(_on_focus_btn_clicked)
-
-#     win.resize(800, 500)
-#     win.show()
-
-#     sys.exit(app.exec())

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Optional
 from PySide6.QtCore import QModelIndex, Qt
-from ui_sdk.components.pyqt.DLCSpinbox import DLCSpinBox
-from ui_sdk.components.pyqt.ParseableEditBox import RawBytesEditBox
+from canapp.widgets.DLCSpinbox import DLCSpinBox
+from canapp.widgets.ParseableEditBox import RawBytesEditBox
 
 
 class DlcRawBinder:

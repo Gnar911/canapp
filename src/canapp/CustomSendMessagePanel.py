@@ -18,7 +18,7 @@ from canapp.widgets.ParseableEditBox import CanIdEditBox, RawBytesEditBox
 from canapp.widgets.DLCSpinbox import DLCSpinBox
 # from can_sdk.data_object import CANLogLine, CANLogPlay, SignalFilter, SendState
 # from can_sdk.global_event import event_on_signal_select
-from ultility import bytes_to_hex_raw, hex_raw_to_bytes 
+# from ultility import bytes_to_hex_raw, hex_raw_to_bytes 
 # TEST module
 # from can_sdk.parser import LogParser
 # from can_sdk.connection_viewmodel import CANConnectManager, Handle, CANDeviceType, ChannelContext
@@ -93,7 +93,7 @@ class LogEditViewModel_QtAdapter(QAbstractItemModel):
         super().__init__(parent)
 
         self._entries = vm._entries
-        self._devices = vm._acquired_devices
+        self._devices = vm.acquired_devices
         self._dbc_data = vm.canIDList
 
         vm.entriesChanged.connect(
@@ -283,7 +283,7 @@ class LogEditViewModel_QtAdapter(QAbstractItemModel):
                 column
                 == self.COL_STR_DIFF
             ):
-                return obj.initial_periodic
+                return obj.initial_periodic_second
 
             if (
                 column
@@ -578,26 +578,6 @@ class _TreeLogEditDelegate(
     #             int(height),
     #         )
     #     )
-
-    # def sizeHint(
-    #     self,
-    #     option,
-    #     index,
-    # ):
-    #     size = super().sizeHint(
-    #         option,
-    #         index,
-    #     )
-
-    #     if (
-    #         self._row_height
-    #         is not None
-    #     ):
-    #         size.setHeight(
-    #             self._row_height
-    #         )
-
-    #     return size
 
     def createEditor(
         self,
@@ -947,32 +927,26 @@ class _TreeLogEditDelegate(
         )
 
 
-_HOVER_STYLESHEET = """
-    QTreeView::item:hover {
-        background: rgba(255, 255, 255, 12);
-    }
-"""
 # -----------------------------
 # Main panel
 # -----------------------------
 class CustomSendMessagePanel(QtWidgets.QWidget):
     # send_status_signal = QtCore.Signal(object)
-
+    _HOVER_STYLESHEET = """
+        QTreeView::item:hover {
+            background: rgba(255, 255, 255, 12);
+        }
+    """
     def __init__(
         self,
-        parent: QWidget,
-        vm: ScheduleViewModel
+        vm: ScheduleViewModel,
+        parent: QWidget = None,
     ):
         super().__init__(parent)
         self.vm = vm
 
         self._build_ui()
 
-        # self.spin_dlc.valueChanged.connect(self._on_dlc_changed)
-        # self.spin_cycle.valueChanged.connect(self._refresh_buttons)
-        # self.chk_use_dbc.toggled.connect(self._on_use_dbc_toggled)
-        # self.combo_msg.currentIndexChanged.connect(self._on_message_changed)
-        # self.edit_msg.textChanged.connect(self._on_message_changed)
         """ NOTE: Flip current editing entry if user selecting one"""
         self.view.selectionModel().currentChanged.connect(
             lambda current, previous:
@@ -1023,6 +997,10 @@ class CustomSendMessagePanel(QtWidgets.QWidget):
                     for play in self.vm.entries
                     if play.is_play
                 ]
+        )
+
+        self.add_btn.clicked.connect(
+            
         )
 
         # Initialize button states

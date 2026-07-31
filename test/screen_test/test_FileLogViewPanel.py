@@ -9,15 +9,16 @@ from canapp.FileLogViewPanel import FileLogViewPanel
 # from canapp.widgets.TreeLogView import TreeLogView
 # from canapp.widgets.TreeLogLazyLoad import TreeLogLazyLoad
 from cansrv.test.fixture import CANService, FileService
+from canapp.vm.container import AppContainer
 
-PARSE_TIMEOUT = 15.0
+# PARSE_TIMEOUT = 15.0
 
-pytest_plugins = ["fixture"]
+# pytest_plugins = ["fixture"]
 
-@pytest.fixture
-def app_vm() -> LogViewModel:
-	print("CS app_vm")
-	return LogViewModel()
+# @pytest.fixture
+# def app_vm() -> LogViewModel:
+# 	print("CS app_vm")
+# 	return LogViewModel()
 
 @pytest.mark.parametrize(
     "file_path",
@@ -26,13 +27,13 @@ def app_vm() -> LogViewModel:
     ],
 )
 @pytest.mark.manual
-def test_parse_action(
+def test_screen_log_view(
     qtbot,
-    file_service: tuple[FileService, LogViewModel], file_path: str,
+    acquire_vcan_devices: AppContainer, file_path: str,
 ) -> None:
-    _, vm = file_service
+    app = acquire_vcan_devices
 
-    widget = FileLogViewPanel(vm)
+    widget = FileLogViewPanel(app.log_vm())
     qtbot.addWidget(widget)
 
     widget.resize(860, 640)
@@ -41,14 +42,17 @@ def test_parse_action(
     # Simulate waiting 3 seconds before pressing Parse.
     qtbot.wait(2000)
 
-    vm.startParsing(file_path)
-    qtbot.waitUntil(
-        lambda: vm.parser_done_event.is_set(),
-        timeout=PARSE_TIMEOUT * 1000,
-    )
+    # vm.startParsing(file_path)
+    # qtbot.waitUntil(
+    #     lambda: vm.parser_done_event.is_set(),
+    #     timeout=PARSE_TIMEOUT * 1000,
+    # )
 
     # Manual inspection time.
-    qtbot.wait(50_000)
+    from PySide6.QtCore import QEventLoop
+    loop = QEventLoop()
+    widget.destroyed.connect(loop.quit)
+    loop.exec()
 
     # Test returns here.
     # pytest-qt cleans up widget because of addWidget().

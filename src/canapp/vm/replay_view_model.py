@@ -8,8 +8,8 @@ from cansrv.test.mock_vm import *
 from cansrv.can_srv import CANService, get_can_service
 from cansrv.file_service import LogId
 from fs_test.mock_vm import ParseModel, DBCModel
-from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
-from cansrv.status import ParserStatus
+# from cansrv.application_events import ParserStatusEvent, DBCLoadedEvent
+# from cansrv.status import ParserStatus
 from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, DBCId, MetadataType
 from typing import TypeAlias
 from cansrv.can_srv import CANDeviceInfo
@@ -253,31 +253,30 @@ class ReplayViewModel(QtViewModelBase, ReplayStatusVM, ScannerVM, SendStatusVM, 
         self.dbcChanged.emit()
 
 
-    def on_dbc_loaded(self, event: DBCLoadedEvent):
-        DBCModel.on_dbc_model_loaded(event=event)
-        """ NOTE: re-evaluate only the DBC name on the filter table"""
-        self.dbc_id = event.dbc_id
+    def on_status_callback(self, event: SrvEvent):
+        super().on_status_callback(event)
+        if isinstance(event, DBCLoadedEvent):
+            """ NOTE: re-evaluate only the DBC name on the filter table"""
+            self.dbc_id = event.dbc_id
 
-    # def on_parser_status(self, event: ParserStatusEvent):
-    #     ParseModel.on_parser_status(self, event)
-    #     status = ParserStatus(int(event.status))
-    #     if status != ParserStatus.DONE:
-    #         source = event.log_id
-    #         assert source is not None
-    #         """ NOTE: User load the file into the log view panel, auto set it to the replay service"""
-            # self._can_service.set_source(source)
-
-    def on_send_status(self, event: SrvEvent) -> None:
-        SendStatusVM.on_send_status(self, event)
         evt = event
         if isinstance(evt, SndClear):
             self.is_active = False
 
         if isinstance(evt, SndAdd):
             self.is_active = True
+
+    # def on_send_status(self, event: SrvEvent) -> None:
+    #     SendStatusVM.on_send_status(self, event)
+    #     evt = event
+    #     if isinstance(evt, SndClear):
+    #         self.is_active = False
+
+    #     if isinstance(evt, SndAdd):
+    #         self.is_active = True
         
-    def on_replay_status(self, event: SrvEvent) -> None:
-        ReplayStatusVM.on_replay_status(self, event)
+    # def on_replay_status(self, event: SrvEvent) -> None:
+    #     ReplayStatusVM.on_replay_status(self, event)
         evt = event
 
         if isinstance(evt, ReplaySetSource):
@@ -357,44 +356,6 @@ class ReplayViewModel(QtViewModelBase, ReplayStatusVM, ScannerVM, SendStatusVM, 
                 time_scope=time_scope,
             )
             return
-        
-    # def on_scan_status(self, payload: SrvEvent) -> None:
-    #     super().on_scan_status(payload)
-    #     if isinstance(payload, ScanDevicePluggedStatus):
-    #         # NOTE: avoid duplicate add when repeated plug notifications arrive
-    #         # if payload.device_info not in self.available_devices:
-    #         #     self.available_devices.append(payload.device_info)
-    #         pass
-
-    #     if isinstance(payload, ScanDeviceUnpluggedStatus):
-    #         device = payload.device_info
-
-    #         # self.available_devices = [
-    #         #     d for d in self.available_devices
-    #         #     if d.device_id != device.device_id
-    #         # ]
-
-    #         self._acquired_devices = [
-    #             d for d in self._acquired_devices
-    #             if d.device_id != device.device_id
-    #         ]
-
-    #     if isinstance(payload, ScanChannelAcquiredStatus):
-    #         device = payload.device_info
-    #         #self.available_devices.remove(device)
-    #         self._acquired_devices.append(device)
-
-    #     if isinstance(payload, ScanChannelReleasedStatus):
-    #         device = payload.device_info
-    #         self._acquired_devices.remove(device)
-    #         #self.available_devices.append(device)
-
-    #     """ NOTE: Do not have the Reactor for list data object -> manual emit state change """
-    #     self.replayStateChanged.emit()
-                
-    """ NOTE: There is no button to set source on the replay screen -> this API View should not existed"""
-    # def setSource(self, record_id: LogId) -> bool:
-    #     self._can_service.set_source(record_id)
 
     """ NOTE: Button start replay"""
     @Slot()
@@ -461,11 +422,11 @@ class ReplayViewModel(QtViewModelBase, ReplayStatusVM, ScannerVM, SendStatusVM, 
 
     @property
     def isHavingRecord(self) -> bool:
-        return self.record_id is not None
+        return not isinstance(self.state, (Empty))
     
     @property
     def isEmptyRecord(self) -> bool:
-        return self.record_id is None
+        return isinstance(self.state, (Empty))
 
     @property
     def hasMsgFilter(self) -> bool:
@@ -528,20 +489,12 @@ class ReplayViewModel(QtViewModelBase, ReplayStatusVM, ScannerVM, SendStatusVM, 
             else None
         )
 
-        def get_msg_name(msg_id: int) -> str:
-            if candb is None:
-                return ""
-
-            try:
-                return candb.get_message_by_frame_id(msg_id).name
-            except KeyError:
-                return ""
-
+        """ NOTE: In case many messages with the same frame_id -> take the first one as default"""
         return [
             CheckItem(
                 value=msg_id,
-                isChecked=msg_id in self.config.ignored_msg_ids,
-                msg_name=get_msg_name(msg_id),
+                is_checked=msg_id in self.config.ignored_msg_ids,
+                msg_name=candb.get_message_by_frame_id(msg_id)[0].name,
             )
             for msg_id in msg_ids
         ]

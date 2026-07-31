@@ -8,8 +8,8 @@ from PySide6.QtCore import Signal, Slot, QTimer, QObject
 from cansrv.test.mock_vm import ScannerVM,ReceiverVM
 from cansrv.test.mock_vm import RecordIdEvent, RecorderStatusEvent
 from canapp.vm.data_object import CANLogLine
-from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, CANDBInfo, FileService
-from cansrv.status import RecorderStatus
+from cansrv.file_service import get_file_service, LogId, MetaDataStorageInterface, CANDBInfo, FileService, MetadataType
+# from cansrv.status import RecorderStatus
 from lw.logger_setup import setup_logger, LOG
 from canapp.vm.data_object import CANLogLine, DecodedSignalLine
 from lw.qt.qtobject_adapter import QtViewModelBase
@@ -39,10 +39,18 @@ class RecordViewModel(QtViewModelBase, ScannerVM, ReceiverVM):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(lambda: self.progressChanged.emit())
         self._timer.stop()
+        self._timer.start()
 
-        #self._viewport = (0, 100)
-        #self._lazy_count = 0
-        #self._auto_fetch: bool = False
+        """ 20260731 BUG: 
+            In C++, QModelIndex stores an opaque pointer (internalPointer). In PySide, when you do:
+
+            self.createIndex(row, column, python_object)
+
+            Shiboken wraps the Python object, but it does not magically keep a strong reference to an object that has no other owners.    
+
+            -> need to store to avoid detroy the object at entry
+        """
+        self.entries: list[CANLogLine] = []
 
     @property
     def record_id(self) -> LogId | None:
@@ -67,25 +75,13 @@ class RecordViewModel(QtViewModelBase, ScannerVM, ReceiverVM):
         self._record_id = value
 
         assert value is not None
-        """ BUG: sqlite3_exec rc=5 sqlite_msg=database is locked"""
+        """ BUG: sqlite3_exec rc=5 sqlite_msg=database is locked -> fixed by make read only mode"""
         self._metadata = MetaDataStorageInterface(value.path_token(), read_only=True)
+
+        """20260730 BUG: cross-thread QTimer.start()"""
+        #self._timer.start()
         
         self.recordingChanged.emit()
-
-    # @property
-    # def is_play(self) -> bool:
-    #     return self._is_play
-
-    # @is_play.setter
-    # def is_play(self, value: bool) -> None:
-    #     if self._is_play == value:
-    #         return
-
-    #     self._timer.start() if value else self._timer.stop()
-
-    #     self._is_play = value
-    #     self.recordingChanged.emit()
-    #     self.stateChanged.emit()
 
     # @property
     # def autoFetch(self):
@@ -102,25 +98,8 @@ class RecordViewModel(QtViewModelBase, ScannerVM, ReceiverVM):
     """ The only place the state changed """
     def on_status_callback(self, event: SrvEvent):
         super().on_status_callback(event)
-        # status = RecorderStatus(int(event.status))
-        # is_play = False
-        #record_id = event.log_id
-        #if status == RecordIdEvent:
-            # assert record_id is None
-            #is_play = False
-            #self._timer.stop()
-        # elif status == RecorderStatus.STARTED:
-        #     # NOTE: Event status changed
-        #     assert record_id is not None
-        #     #self._timer.start()
-        #     is_play = True
-        #self.is_play = is_play
         if isinstance(event, RecordIdEvent):
             self.record_id = event.record_id
-
-    # @property
-    # def isRecording(self) -> bool:
-    #     return self.is_play
 
     @property
     def is_having_record(self) -> bool:
@@ -147,14 +126,11 @@ class RecordViewModel(QtViewModelBase, ScannerVM, ReceiverVM):
     """ NOTE: Qt Tree will auto re-evaluate for it"""
     @property
     def totalRows(self) -> int:
-        if self.metadata is None:
+        if self._metadata is None:
             return 0
-        return self.metadata.fetch_count()
-
-    # @property
-    # def loadedRows(self) -> int:
-    #     pass
-
+        #return self._metadata.fetch_count()
+        return self._metadata.get_metadata(MetadataType.TOTAL)
+    
     @property
     def row(self) -> int:
         return self._row
@@ -282,4 +258,6 @@ class RecordViewModel(QtViewModelBase, ScannerVM, ReceiverVM):
 
         #     line.signals = decoded_signals
 
+        """ NOTE: need to store to avoid detroy the object at entry"""
+        self.entries.append(line)
         return line

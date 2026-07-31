@@ -31,6 +31,7 @@ from canapp.vm.data_object import (
     CANLogLine,
     DecodedSignalLine,
 )
+from cansrv.event_dispatcher import *
 
 """ NOTE: For DBC's message selection"""
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ class MessageItem:
 class CANPlayEntry:
     device_info: CANDeviceInfo | None
     entry: LogRecord
-    initial_periodic: float
+    initial_periodic_second: float
 
     @property
     def identity(self) -> tuple[str, int]:
@@ -58,7 +59,28 @@ class CANPlayEntry:
             device_id,
             int(self.entry.can_id),
         )
-    
+
+@dataclass
+class DecodedSignalLine:
+    name: str
+    raw_value: str
+    unit: str
+    parent: "CANLogPlay" | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+    @property
+    def signal_line(self) -> str:
+        text = f"{self.name}: {self.raw_value}"
+
+        if self.unit:
+            text += f" {self.unit}"
+
+        return text
+
+
 """ NOTE: Data View"""
 @dataclass
 class CANLogPlay:
@@ -67,6 +89,7 @@ class CANLogPlay:
     is_disconnet: bool
     data_model: CANPlayEntry
     message_name: str = ""
+    signals: list[DecodedSignalLine] = field(default=list)
 
     @property
     def device_info(self) -> CANDeviceInfo | None:
@@ -77,12 +100,12 @@ class CANLogPlay:
         self.data_model.device_info = value
     
     @property
-    def initial_periodic(self) -> float:
-        return float(self.data_model.initial_periodic)
+    def initial_periodic_second(self) -> float:
+        return float(self.data_model.initial_periodic_second)
 
-    @initial_periodic.setter
-    def initial_periodic(self, value: float) -> None:
-        self.data_model.initial_periodic = float(value)
+    @initial_periodic_second.setter
+    def initial_periodic_second(self, value: float) -> None:
+        self.data_model.initial_periodic_second = float(value)
 
     """ NOTE: Add passthroughs"""
     @property
@@ -147,44 +170,6 @@ class CANLogPlay:
             parsed.append(int(token, 16) & 0xFF)
         self.data = parsed
 
-    @property
-    def changed(self) -> bool:
-        return bool(self.data_model.entry.changed)
-
-    @changed.setter
-    def changed(self, value: bool) -> None:
-        self.data_model.entry.changed = int(bool(value))
-    @property
-    def last_timestamp(self) -> float:
-        return float(self.data_model.entry.last_timestamp)
-
-    @last_timestamp.setter
-    def last_timestamp(self, value: float) -> None:
-        self.data_model.entry.last_timestamp = float(value)
-
-    @property
-    def line_number(self) -> int:
-        row_id = getattr(self.data_model.entry, "row_id", None)
-        if row_id is not None:
-            return int(row_id)
-        return int(self.data_model.entry.line_number)
-
-    # @property
-    # def show_direction(self) -> str:
-    #     return self.direction
-
-    # @property
-    # def show_can_id(self) -> str:
-    #     return f"{self.can_id:X}"
-
-    # @property
-    # def show_data_len(self) -> int:
-    #     return self.data_len
-
-    # @property
-    # def show_raw_data(self) -> str:
-    #     return self.raw_data
-
     """ NOTE: column select device"""
     @property
     def device_info_display(self) -> str:
@@ -223,7 +208,7 @@ class CANLogPlay:
             data_model=CANPlayEntry(
                 device_info=None,
                 entry=entry,
-                initial_periodic=100.0,
+                initial_periodic_second=100.0,
             ),
         )
     
@@ -294,7 +279,7 @@ class ScheduleViewModel(QtViewModelBase, SendStatusVM, ScannerVM, DBCModel):
         return self._can_service.send_msg_loop(
         entry.device_info,
         entry.entry,
-        entry.initial_periodic,
+        entry.initial_periodic_second,
     )
     @Slot(object)
     def sendOnce(self, entry: CANPlayEntry):
@@ -350,57 +335,6 @@ class ScheduleViewModel(QtViewModelBase, SendStatusVM, ScannerVM, DBCModel):
         if isinstance(evt, DBCLoadedEvent):
             self.dbc_id = evt.dbc_id
             return
-
-        """ NOTE: Avoid duplicate the device state here"""
-        # if isinstance(evt, ScanDeviceUnpluggedStatus):
-        #     device = evt.device_info
-
-        #     # Remove from acquired devices (idempotent)
-        #     self._acquired_devices = [
-        #         d for d in self._acquired_devices
-        #         if d.device_id != device.device_id
-        #     ]
-
-        #     # Remove all replay entries for this device (idempotent)
-        #     before = len(self._entries)
-        #     self._entries = [
-        #         play
-        #         for play in self._entries
-        #         if play.data_model.device_info != device
-        #     ]
-
-        #     if len(self._entries) != before:
-        #         self.entriesChanged.emit()
-
-        # elif isinstance(evt, ScanChannelAcquiredStatus):
-        #     device = evt.device_info
-
-        #     # Ignore duplicate acquire notifications
-        #     if all(d.device_id != device.device_id for d in self._acquired_devices):
-        #         self._acquired_devices.append(device)
-
-
-        # elif isinstance(evt, ScanChannelReleasedStatus):
-        #     device = evt.device_info
-
-        #     # Remove from acquired devices (idempotent)
-        #     self._acquired_devices = [
-        #         d for d in self._acquired_devices
-        #         if d.device_id != device.device_id
-        #     ]
-
-        #     # Remove replay entries for this device (idempotent)
-        #     before = len(self._entries)
-        #     self._entries = [
-        #         play
-        #         for play in self._entries
-        #         if play.data_model.device_info != device
-        #     ]
-
-        #     if len(self._entries) != before:
-        #         self.entriesChanged.emit()
-
-        # self.stateChanged.emit()
 
         if isinstance(evt, SndClear):
             self._entries.clear()

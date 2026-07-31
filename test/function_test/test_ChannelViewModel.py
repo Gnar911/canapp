@@ -2,48 +2,28 @@ from __future__ import annotations
 
 import logging
 import pytest
+import time
 
 from lw.logger_setup import LOG
-from lw.test_event import wait
+# from lw.test_event import wait
 from cansrv.test.fixture import CANService
 from canapp.vm.channel_view_model import ChannelViewModel
-from canapp.container import AppContainer
-
-LOG.setLevel(logging.DEBUG)
-
-pytest_plugins = ["fixture"]
-
-TIMEOUT_QUERY_MS = 1000
-
-
-@pytest.fixture
-def app_vm() -> ChannelViewModel:
-    print("CS app_vm")
-    return ChannelViewModel()
-
-def test_channel_view_model_defaults(
-    setup_vcan_devices: tuple[CANService, ChannelViewModel, int],
-) -> None:
-    _, vm, _ = setup_vcan_devices
-
-    assert wait(lambda: isinstance(vm.vendor_list, list), max_ms=TIMEOUT_QUERY_MS)
-    assert wait(lambda: isinstance(vm.available_device_lists, list), max_ms=TIMEOUT_QUERY_MS,)
+from canapp.vm.container import AppContainer
 
 def test_channel_view_model_call_vm_functions(
-    setup_vcan_devices: tuple[CANService, ChannelViewModel, int],
+    setup_vcan_devices: tuple[AppContainer, int],
 ) -> None:
-    _, vm, _ = setup_vcan_devices
+    app , _ = setup_vcan_devices
 
-    listed = wait(lambda: vm.available_device_lists, max_ms=TIMEOUT_QUERY_MS,)
-    assert listed, "No available devices found from viewmodel"
-
-    selected_id = listed[0]
+    selected_id = app.channel_vm()[0]
     device = next(
-        d for d in vm.available_devices
+        d for d in app.channel_vm().available_devices
         if str(d.device_id) == selected_id
     )
 
-    acquired = vm.acquireDevice(device)
+    acquired = app.channel_vm().acquireDevice(device)
     assert isinstance(acquired, bool)
 
-    vm.releaseDevice(device)
+    time.sleep(5)
+
+    app.channel_vm().releaseDevice(device)

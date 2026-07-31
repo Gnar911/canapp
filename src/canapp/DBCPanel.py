@@ -1,39 +1,172 @@
 from PySide6.QtWidgets import (
-    QWidget, QGroupBox, QPushButton, QListWidget,
+    QWidget, QGroupBox, QPushButton, QListView,
     QLineEdit, QLabel, QGridLayout, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QMessageBox, QFileDialog, QComboBox, QCheckBox, QSizePolicy,
     QRadioButton, QButtonGroup, QScrollArea)
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, SignalInstance
 from typing import Optional
 # from canapp.widgets.basic_component.ReadonlyListbox import ReadOnlyListWidget
 # from canapp.widgets.basic_component.CollapsibleSection import CollapsibleSection
-from canapp.vm.dbc_view_model import DbcViewModel, ListModel
+from canapp.vm.dbc_view_model import DbcViewModel, DisplayItem, DbcItem, MessageItem, SignalItem
 from lw.logger_setup import LOG
-# from can_sdk.logger_setup import LOG, setup_logger
-# from can_sdk.global_event import event_on_signal_select
+from pathlib import Path
+from PySide6.QtCore import (
+    Qt,
+    QModelIndex,
+    QAbstractListModel,
+)
+from typing import Protocol, TypeVar, Generic
+from collections.abc import Callable
+from PySide6.QtCore import SignalInstance
+
+""" NOTE: QListWidget is the convenient widget for quick prototype, while QListView is for MVVM
+list = QListWidget()
+
+list.addItem("Toyota")
+list.addItem("Mazda")
+list.addItem("Honda")
+
+list.takeItem(1)
+list.clear()
+
+self.lb_signal_list.currentRowChanged.connect(
+    lambda _: setattr(
+        self.vm,
+        "curSignal",
+        self.lb_signal_list.currentIndex().data(
+            ListModel.ItemRole
+        ),
+    )
+)
+"""
+T = TypeVar("T", bound=DisplayItem)
+class ListModel(QAbstractListModel, Generic[T]):
+    ItemRole = Qt.UserRole + 1
+
+    def __init__(
+        self,
+        get_items: Callable[[], list[T]],
+        changed_signal: SignalInstance,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._get_items = get_items
+        changed_signal.connect(self._on_dbc_changed)
+
+    def _on_dbc_changed(self):
+        #LOG.debug("_on_dbc_changed")
+        self.beginResetModel()
+        self.endResetModel()
+
+    @property
+    def items(self) -> list[T]:
+        return self._get_items()
+    
+    def rowCount(
+        self,
+        parent: QModelIndex = QModelIndex(),
+    ) -> int:
+        if parent.isValid():
+            return 0
+
+        return len(self.items)
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.DisplayRole,
+    ):
+        if not index.isValid():
+            return None
+
+        row = index.row()
+
+        if not 0 <= row < len(self.items):
+            return None
+
+        item = self.items[row]
+
+        if role == Qt.DisplayRole:
+            return item.show
+
+        if role == self.ItemRole:
+            return item
+
+        return None
+
+    def roleNames(self):
+        return {
+            self.ItemRole: b"item",
+        }
+
 
 SUPPORTED_EXT = {".asc", ".log", ".txt", ".csv", ".blf", ".xls", ".xlsx"}
 
 class CANDBCPanel(QWidget):
-    def __init__(self, parent, model: DbcViewModel):
+    def __init__(self, model: DbcViewModel, parent = None):
         super().__init__(parent)
         self.vm = model          # CANDBManager
         # self.cur_sig: SignalFilter = None
-        self._last_mode: Optional[str] = None
+        self.dbcs = ListModel(
+            lambda: self.vm._items,
+            self.vm.dbcChanged,
+            self,
+        )
+
+        self.messages = ListModel(
+            lambda: self.vm._message_lists,
+            self.vm.onMessageSelect,
+            self,
+        )
+
+        self.signals = ListModel(
+            lambda: self.vm._signal_lists,
+            self.vm.signalSelectChanged,
+            self,
+        )
 
         self._build_ui()
 
+        """
         self.btn_load_db.clicked.connect(self.on_btn_load_candb_clicked)
+        def on_btn_load_candb_clicked(self):
+            LOG.debug("Click add candb button")
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load CAN DBC",
+                "",
+                "CAN Database (DBC files) (*.dbc)"
+            )
+
+            if not file_path:
+                return
+
+            self.vm.loadDBC(file_path)
+        """
+        self.btn_load_db.clicked.connect(
+        lambda: (
+            lambda p:
+                 p and self.vm.loadDBC(p))
+            (QFileDialog.getOpenFileName(
+                self,
+                "Load CAN DBC",
+                "",
+                "CAN Database (DBC files) (*.dbc)"
+            )[0])
+        )
 
         self.status_can_db.currentIndexChanged.connect(
-            lambda _: setattr(
-                self.vm,
-                "dbc_id",
-                self.status_can_db.currentData(
-                    ListModel.ItemRole
+            lambda index: (
+                self.status_can_db.setCurrentIndex(index),
+                setattr(
+                    self.vm,
+                    "dbc_id",
+                    self.status_can_db.itemData(index, ListModel.ItemRole).dbc_id
+                    if index >= 0 else None,
                 ),
             )
         )
+
         self.tb_msg_filter.textChanged.connect(
             lambda text: setattr(self.vm, "msgFilter", text)
         )
@@ -41,32 +174,25 @@ class CANDBCPanel(QWidget):
         self.tb_signal_filter.textChanged.connect(
             lambda text: setattr(self.vm, "sigFilter", text)
         )
-        # toggle global search refresh
-        # try:
-        #     self.cb_signal_global.stateChanged.connect(lambda _: self.update_signal_list(self.tb_signal_filter.text()))
-        # except Exception:
-        #     pass
-        self.lb_msg_list.currentRowChanged.connect(
-            lambda _: setattr(
+
+        """ BUG:  AttributeError: 'NoneType' object has no attribute 'currentChanged'"""
+        self.lb_msg_list.selectionModel().currentChanged.connect(
+            lambda current, _: setattr(
                 self.vm,
                 "curMessage",
-                self.lb_msg_list.currentIndex().data(
-                    ListModel.ItemRole
-                ),
+                current.data(ListModel.ItemRole),
+            )
+        )
+        self.lb_signal_list.selectionModel().currentChanged.connect(
+            lambda current, _: setattr(
+                self.vm,
+                "curSignal",
+                current.data(ListModel.ItemRole),
             )
         )
 
-        self.lb_signal_list.currentRowChanged.connect(
-            lambda _: setattr(
-                self.vm,
-                "curSignal",
-                self.lb_signal_list.currentIndex().data(
-                    ListModel.ItemRole
-                ),
-            )
-        )
-        self.vm.dbcChanged.connect(self._reevaluate)
-        self._reevaluate()
+        # self.vm.dbcChanged.connect(self._reevaluate)
+        # self._reevaluate()
 
     # ------------------------------------------------------------------
     # UI
@@ -84,9 +210,9 @@ class CANDBCPanel(QWidget):
         # ---- Combobox (under the button) ----
         self.status_can_db = QComboBox()
         self.status_can_db.setModel(
-            self.vm.dbcs
+            self.dbcs
         )
-        self.status_can_db.setModel(self.vm)
+        self.status_can_db.setCurrentIndex(0)
         self.status_can_db.setModelColumn(0)
 
         self.status_can_db.setEditable(True)
@@ -123,9 +249,6 @@ class CANDBCPanel(QWidget):
         self._db_layout.setSpacing(4)
 
         self._lists_container = QWidget(self.db_group)
-        self._lists_layout = QBoxLayout(QBoxLayout.LeftToRight, self._lists_container)
-        self._lists_layout.setContentsMargins(0, 0, 0, 0)
-        self._lists_layout.setSpacing(6)
 
         # Message filter + list
         self.msg_panel = QWidget(self._lists_container)
@@ -137,8 +260,8 @@ class CANDBCPanel(QWidget):
         self.tb_msg_filter.setPlaceholderText("Message Filter")
         self.tb_msg_filter.setClearButtonEnabled(True)
         self.tb_msg_filter.setMinimumWidth(0)
-        self.lb_msg_list = QListWidget(self.msg_panel)
-        self.lb_msg_list.setModel(self.vm.messages)
+        self.lb_msg_list = QListView(self.msg_panel)
+        self.lb_msg_list.setModel(self.messages)
         self.lb_msg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.lb_msg_list.setMinimumWidth(0)
 
@@ -157,14 +280,14 @@ class CANDBCPanel(QWidget):
         self.tb_signal_filter.setPlaceholderText("Signal Filter")
         self.tb_signal_filter.setClearButtonEnabled(True)
         self.tb_signal_filter.setMinimumWidth(0)
-        self.lb_signal_list = QListWidget(self.sig_panel)
-        self.lb_msg_list.setModel(self.vm.signals)
+        self.lb_signal_list = QListView(self.sig_panel)
+        self.lb_signal_list.setModel(self.signals)
         self.lb_signal_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.lb_signal_list.setMinimumWidth(0)
 
         # Checkbox to enable global signal search mode
-        self.cb_signal_global = QCheckBox("All")
-        self.cb_signal_global.setToolTip("Search signals across all messages when checked")
+        # self.cb_signal_global = QCheckBox("All")
+        # self.cb_signal_global.setToolTip("Search signals across all messages when checked")
 
         # Create horizontal layout for "Signal List" label and checkbox
         signal_label_widget = QWidget()
@@ -173,13 +296,17 @@ class CANDBCPanel(QWidget):
         signal_label_layout.setVerticalSpacing(0)
         self.lb_signal_title = QLabel("Signal List")
         signal_label_layout.addWidget(self.lb_signal_title, 0, 0, Qt.AlignLeft | Qt.AlignTop)
-        signal_label_layout.setColumnStretch(1, 1)  # Add stretch in middle
-        signal_label_layout.addWidget(self.cb_signal_global, 0, 2, Qt.AlignRight | Qt.AlignTop)  # Checkbox at right
+        #signal_label_layout.setColumnStretch(1, 1)  # Add stretch in middle
+        #signal_label_layout.addWidget(self.cb_signal_global, 0, 2, Qt.AlignRight | Qt.AlignTop)  # Checkbox at right
         self.sig_panel_layout.addWidget(signal_label_widget)
         self.sig_panel_layout.addWidget(self.tb_signal_filter)
         self.sig_panel_layout.addWidget(self.lb_signal_list, 1)
 
-        self._lists_layout.addWidget(self.msg_panel, 1)
+        # Stack message panel above signal panel by default
+        self._lists_layout = QBoxLayout(QBoxLayout.TopToBottom, self._lists_container)
+        self._lists_layout.setContentsMargins(0, 0, 0, 0)
+        self._lists_layout.setSpacing(6)
+        self._lists_layout.addWidget(self.msg_panel, 0)
         self._lists_layout.addWidget(self.sig_panel, 1)
 
         # # ---- CAN ID collision inspector ----
@@ -208,26 +335,27 @@ class CANDBCPanel(QWidget):
         # self.section_collision.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         self._db_layout.addWidget(self._lists_container, 1)
-        self._db_layout.addWidget(self.section_collision, 0)
+        # self._db_layout.addWidget(self.section_collision, 0)
 
         main.addWidget(top)
         main.addWidget(self.db_group, 1)
 
-        self._apply_layout_mode("landscape")
+        #self._apply_layout_mode("landscape")
 
-    def _apply_layout_mode(self, mode: str):
-        if mode == self._last_mode:
-            return
+    # def _apply_layout_mode(self, mode: str):
+    #     if mode == self._last_mode:
+    #         return
 
-        if mode == "portrait":
-            self._lists_layout.setDirection(QBoxLayout.TopToBottom)
-            self.collision_scroll.setMaximumHeight(140)
-        else:
-            self._lists_layout.setDirection(QBoxLayout.LeftToRight)
-            self.collision_scroll.setMaximumHeight(220)
+    #     if mode == "portrait":
+    #         self._lists_layout.setDirection(QBoxLayout.TopToBottom)
+    #         self.collision_scroll.setMaximumHeight(140)
+    #     else:
+    #         self._lists_layout.setDirection(QBoxLayout.LeftToRight)
+    #         self.collision_scroll.setMaximumHeight(220)
 
-        self._last_mode = mode
+    #     self._last_mode = mode
 
+    """ NOTE Qt C++ event loop call to this -> segment fault
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
@@ -235,17 +363,17 @@ class CANDBCPanel(QWidget):
         h = self.height()
         mode = "landscape" if w > h * 1.2 else "portrait"
         self._apply_layout_mode(mode)
-
+    """
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
-    def _reevaluate(self):
-        # LOG.debug("Re-eval")
-        self.total_msg_label.setText(f"Total messages: {self.vm.dbcMessagesCount}")
-        self.lb_msg_list.clear()
-        self.lb_signal_list.clear()
-        self.lb_msg_list.addItems(self.vm.messagesList)
-        self.lb_signal_list.addItems(self.vm.signalList)
+    # def _reevaluate(self):
+    #     # LOG.debug("Re-eval")
+    #     self.total_msg_label.setText(f"Total messages: {self.vm.dbcMessagesCount}")
+    #     self.lb_msg_list.clear()
+    #     self.lb_signal_list.clear()
+    #     self.lb_msg_list.addItems(self.vm.messagesList)
+    #     self.lb_signal_list.addItems(self.vm.signalList)
 
     # ------------------------------------------------------------------
     # Message / Signal Logic
@@ -294,21 +422,6 @@ class CANDBCPanel(QWidget):
 
     #     filtered = self._filtered_list(items, filter_text)
     #     self.lb_signal_list.addItems(filtered)
-
-
-    def on_btn_load_candb_clicked(self):
-        LOG.debug("Click add candb button")
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load CAN DBC",
-            "",
-            "CAN Database (DBC files) (*.dbc)"
-        )
-
-        if not file_path:
-            return
-
-        self.vm.loadDBC(file_path)
 
         # Load or add database
         # if not self.vm.get_main_db_file():

@@ -10,7 +10,7 @@ from canapp.vm.replay_view_model import ReplayViewModel
 from lw.logger_setup import LOG, setup_logger
 from lw.qt.declarative import bind
 from canapp.widgets.basic_component.CollapsibleSection import CollapsibleSection 
-from canapp.widgets.ReplayTimescopeSlider import ReplayTimescopeSlider
+# from canapp.widgets.ReplayTimescopeSlider import ReplayTimescopeSlider
 #from canapp.widgets.basic_component.CheckListSearch import CheckListSearch 
 # from canapp.data_object import CANLogLine
 from PySide6.QtGui import QStandardItemModel, QStandardItem
@@ -23,15 +23,15 @@ class CustomReplayPanel(QtWidgets.QWidget):
 	def __init__(
 		self,
 		vm: ReplayViewModel,
-		parent: QWidget,
+		parent: QWidget = None,
 	):
 		super().__init__(parent)
 		self.vm = vm
 		#self._selected_signal_can_id: Optional[int] = None
 		#self._replay_lines: list[CANLogLine] = []
 		#self._replay_status: str = "IDLE"
-		self._completed_cycles: int = 0
-		self.replay_status_signal.connect(self._handle_replay_status_on_ui, Qt.QueuedConnection)
+		#self._completed_cycles: int = 0
+		#self.replay_status_signal.connect(self._handle_replay_status_on_ui, Qt.QueuedConnection)
 
 		self._build_ui()
 
@@ -137,7 +137,7 @@ class CustomReplayPanel(QtWidgets.QWidget):
 		bind(
 			self.vm.replayStateChanged,
 			self.lb_cycle_status.setText, 
-			f"Completed: {self.vm.currentCycle}/∞",
+			lambda: f"Completed: {self.vm.currentCycle}/∞",
 		)
 
 		""" NOTE: it could be callable at binding time -> lambda

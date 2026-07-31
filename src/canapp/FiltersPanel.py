@@ -4,23 +4,24 @@ from PySide6 import QtWidgets
 from PySide6.QtWidgets import QWidget, QListView
 # from CenterContextPane import CenterContextManagerViewModel
 # from can_sdk.canlog_viewmodel import BasicFileLogContext, FilterMode, LogContextManager
-from can_sdk.dbc_manager import CANDBManager
+# from can_sdk.dbc_manager import CANDBManager
 # from can_sdk.data_object import CANLogLine
 from canapp.widgets.basic_component.CollapsibleSection import CollapsibleSection
-from canapp.widgets.FilterTimeScopeSlider import FilterTimeScopeSlider
+# from canapp.widgets.FilterTimeScopeSlider import FilterTimeScopeSlider
 # from ui_sdk.components.pyqt.MessageFilterCheckList import MessageFilterCheckList
 # from ui_sdk.components.pyqt.ChannelFilterCheckList import ChannelFilterCheckList
 # from ui_sdk.components.pyqt.SignalFilterCheckList import SignalFilterCheckList
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QTimer
-from typing import Dict, List, Optional, Tuple
+# from typing import Dict, List, Optional, Tuple
 # from can_sdk.logger_setup import LOG, setup_logger
 from canapp.vm.log_viewmodel import LogViewModel, MessageItem, SignalItem, ChannelItem
-from can_sdk.dbc_manager import CANDBManager
-from typing import List, Dict, Optional, Tuple
+# from can_sdk.dbc_manager import CANDBManager
+# from typing import List, Dict, Optional, Tuple
 from PySide6.QtCore import Qt, QModelIndex, QAbstractListModel
 from PySide6.QtCore import Qt, QSortFilterProxyModel
 from PySide6.QtWidgets import QLineEdit, QListView
-from ultility import *
+from enum import Enum, auto
+# from ultility import *
 
 # class CheckListSearch(QWidget):
 #     def __init__(
@@ -85,17 +86,23 @@ from ultility import *
 #         finally:
 #             self._reordering = False
 
+class FilterKind(Enum):
+    MESSAGE = auto()
+    SIGNAL = auto()
+    CHANNEL = auto()
 
-T = TypeVar("T")
-class FilterItemsListModel(QAbstractListModel, Generic[T]):
+""" NOTE: we can not use generic here because can not check the isinstance list[T]"""
+# T = TypeVar("T")
+class FilterItemsListModel(QAbstractListModel):
 
     ROLE_ITEM = Qt.UserRole + 1
 
-    def __init__(self, vm: LogViewModel, parent=None):
+    def __init__(self, vm: LogViewModel,kind: FilterKind, parent=None):
         super().__init__(parent)
 
         self.vm = vm
-        self._items: list[T] = []
+        self.kind = kind
+        self._items: list = []
 
         self.vm.commonStateChanged.connect(self.reevaluate)
 
@@ -104,17 +111,25 @@ class FilterItemsListModel(QAbstractListModel, Generic[T]):
     def reevaluate(self):
         self.beginResetModel()
 
-        if isinstance(self._items, 
-                      list[MessageItem]): 
-            self._items = self.vm.filterMessageList
+        # if isinstance(self._items, 
+        #               list[DisplayItem]): 
+        #     self._items = self.vm.filterMessageList
 
-        if isinstance(self._items,
-                       list[SignalItem]): 
-            self._items = self.vm.filterSignalList
+        # if isinstance(self._items,
+        #                list[DisplayItem]): 
+        #     self._items = self.vm.filterSignalList
 
-        if isinstance(self._items, 
-                      list[ChannelItem]): 
-            self._items = self.vm.filterChannelList
+        # if isinstance(self._items, 
+        #               list[DisplayItem]): 
+        #     self._items = self.vm.filterChannelList
+
+        match self.kind:
+            case FilterKind.MESSAGE:
+                self._items = self.vm.filterMessageList
+            case FilterKind.SIGNAL:
+                self._items = self.vm.filterSignalList
+            case FilterKind.CHANNEL:
+                self._items = self.vm.filterChannelList
 
         self.endResetModel()
 
@@ -186,8 +201,8 @@ class FilterItemsListModel(QAbstractListModel, Generic[T]):
 class FiltersPanel(QtWidgets.QWidget):
     def __init__(
         self,
-        parent: QWidget,
-        vm: LogViewModel
+        vm: LogViewModel,
+        parent: QWidget = None,
     ):
         super().__init__(parent)
         self.vm = vm
@@ -217,7 +232,7 @@ class FiltersPanel(QtWidgets.QWidget):
         self.edit_message_search = QLineEdit(self)
         self.edit_message_search.setPlaceholderText("Search...")
 
-        self.message_model = FilterItemsListModel(self.vm)
+        self.message_model = FilterItemsListModel(self.vm, FilterKind.MESSAGE)
 
         self.message_proxy = QSortFilterProxyModel(self)
         self.message_proxy.setSourceModel(self.message_model)
@@ -244,7 +259,7 @@ class FiltersPanel(QtWidgets.QWidget):
         self.edit_channel_search = QLineEdit(self)
         self.edit_channel_search.setPlaceholderText("Search...")
 
-        self.channel_model = FilterItemsListModel(self.vm)
+        self.channel_model = FilterItemsListModel(self.vm, FilterKind.CHANNEL)
 
         self.channel_proxy = QSortFilterProxyModel(self)
         self.channel_proxy.setSourceModel(self.channel_model)

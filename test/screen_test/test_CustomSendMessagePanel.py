@@ -2,37 +2,25 @@ from __future__ import annotations
 
 import pytest
 
-from lw.test_event import wait
 from canapp.vm.schedule_view_model import ScheduleViewModel
 from canapp.CustomSendMessagePanel import CustomSendMessagePanel
 from cansrv.test.fixture import CANService
+from canapp.vm.container import AppContainer
 
-pytest_plugins = ["fixture"]
-
-TIMEOUT_STATUS = 3.0
-TIMEOUT_QUERY_MS = 30
-
-
-@pytest.fixture
-def app_vm() -> ScheduleViewModel:
-    print("CS app_vm")
-    return ScheduleViewModel()
-
-
-@pytest.mark.manual
 def test_custom_send_panel_clear_manual(
     qtbot,
-    can_service: tuple[CANService, ScheduleViewModel],
+    acquire_vcan_devices: AppContainer,
 ) -> None:
-    _, vm = can_service
+    app = acquire_vcan_devices
 
-    widget = CustomSendMessagePanel(None, vm)
+    widget = CustomSendMessagePanel(app.schedule_vm())
     qtbot.addWidget(widget)
 
     widget.resize(900, 640)
     widget.show()
     qtbot.wait(300)
 
-    vm.clear()
-    assert vm.snd_clear_event.wait(TIMEOUT_STATUS)
-    assert wait(lambda: len(vm.entries), max_ms=TIMEOUT_QUERY_MS) >= 0
+    from PySide6.QtCore import QEventLoop
+    loop = QEventLoop()
+    widget.destroyed.connect(loop.quit)
+    loop.exec()

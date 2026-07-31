@@ -12,7 +12,7 @@ from canapp.vm.schedule_view_model import ScheduleViewModel
 from cansrv.module.fs_core import LogRecord
 from canapp.vm.schedule_view_model import CANPlayEntry
 from cansrv.snd_contract import SndAdd
-from canapp.container import AppContainer
+from canapp.vm.container import AppContainer
 
 def test_send_msg_loop(
     setup_vcan_devices: tuple[AppContainer, int],
