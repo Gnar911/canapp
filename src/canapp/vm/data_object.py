@@ -22,7 +22,7 @@ value = str
 @dataclass
 class DecodedSignalLine:
     name: str
-    raw_value: str
+    value: str
     unit: str
 
     changed: bool = False
@@ -35,7 +35,7 @@ class DecodedSignalLine:
 
     @property
     def signal_line(self) -> str:
-        text = f"{self.name}: {self.raw_value}"
+        text = f"{self.name}: {self.value}"
 
         if self.unit:
             text += f" {self.unit}"
@@ -353,18 +353,17 @@ class CANLogLine:
         self.data_model.data_len = int(value)
 
     @property
-    def data(self) -> list[int]:
-        raw = bytes(self.data_model.data)
-        return list(raw[: self.data_len])
+    def data(self):
+        return self.data_model.data
 
-    @data.setter
-    def data(self, value: list[int]) -> None:
-        clipped = [
-            int(v) & 0xFF
-            for v in value
-        ]
-        self.data_model.data = bytes(clipped)
-        self.data_model.data_len = len(clipped)
+    # @data.setter
+    # def data(self, value: list[int]) -> None:
+    #     clipped = [
+    #         int(v) & 0xFF
+    #         for v in value
+    #     ]
+    #     self.data_model.data = bytes(clipped)
+    #     self.data_model.data_len = len(clipped)
 
     @property
     def changed(self) -> bool:

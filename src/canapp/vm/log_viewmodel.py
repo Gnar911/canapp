@@ -493,6 +493,7 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
                 srv_feedback = True
                 #self._timer.stop()
 
+            LOG.debug(" This log: %s", log_id)
             self.log_id = log_id
             self.srv_feedback = srv_feedback
 
@@ -521,6 +522,7 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
         return self._file_service.parse_log_file(fspath(path))
 
     def closeLog(self):
+        LOG.debug("closeLog")
         self.log_id = None
 
     @property
@@ -646,14 +648,14 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
             view_browser.size(),
         )
 
-        LOG.debug(
-            "entries window page=%s size=%s browser_size=%s start=%s end=%s",
-            self.pageNum,
-            self.pageSize,
-            view_browser.size(),
-            start,
-            end,
-        )
+        # LOG.debug(
+        #     "entries window page=%s size=%s browser_size=%s start=%s end=%s",
+        #     self.pageNum,
+        #     self.pageSize,
+        #     view_browser.size(),
+        #     start,
+        #     end,
+        # )
 
         for i in range(start, end):
             row = view_browser.at(i)
@@ -662,101 +664,48 @@ class LogViewModel(QtViewModelBase, ParseModel, DBCModel):
                 data_model=row,
             )
 
-            # if db is not None:
-            #     try:
-            #         result = db.decode_message(
-            #             line.can_id,
-            #             line.data,
-            #         )
-            #         message_def = (
-            #             db.get_message_by_frame_id(
-            #                 line.can_id
-            #             )
-            #         )
+            if db is not None:
+                try:
+                    result = db.decode_message(
+                        line.can_id,
+                        line.data,
+                    )
+                    message_def = (
+                        db.get_message_by_frame_id(
+                            line.can_id
+                        )
+                    )
 
-            #         decoded_signals: list[
-            #             DecodedSignalLine
-            #         ] = []
+                    if len(message_def) == 0:
+                        raise
 
-            #         if (
-            #             isinstance(result, dict)
-            #             and message_def is not None
-            #         ):
-            #             for sig_name, sig_value in result.items():
-            #                 sig_def = None
+                    line.message_name = message_def[0].name
 
-            #                 try:
-            #                     sig_def = (
-            #                         message_def
-            #                         .get_signal_by_name(
-            #                             str(sig_name)
-            #                         )
-            #                     )
-            #                 except Exception:
-            #                     sig_def = None
+                    decoded_signals: list[
+                        DecodedSignalLine
+                    ] = []
 
-            #                 raw_value = 0
+                    for sig_name, sig_value in result.items():
+                        """ NOTE: Default take the first message def"""
+                        sig_def = (message_def[0].get_signal_by_name(str(sig_name)))
+                        sig = DecodedSignalLine(
+                            unit=sig_def.unit,
+                            name=sig_name,
+                            value=str(sig_value),
+                            changed=bool(
+                                line.changed
+                            ),
+                            parent=line
+                        )
 
-            #                 if isinstance(
-            #                     sig_value,
-            #                     bool,
-            #                 ):
-            #                     raw_value = int(
-            #                         sig_value
-            #                     )
+                        decoded_signals.append(
+                            sig
+                        )
 
-            #                 elif isinstance(
-            #                     sig_value,
-            #                     (int, float),
-            #                 ):
-            #                     raw_value = int(
-            #                         sig_value
-            #                     )
+                    line.signals = decoded_signals
 
-            #                 elif (
-            #                     sig_def is not None
-            #                     and getattr(
-            #                         sig_def,
-            #                         "choices",
-            #                         None,
-            #                     )
-            #                 ):
-            #                     for (
-            #                         choice_raw,
-            #                         choice_label,
-            #                     ) in sig_def.choices.items():
-            #                         if (
-            #                             str(choice_label)
-            #                             == str(sig_value)
-            #                         ):
-            #                             raw_value = int(
-            #                                 choice_raw
-            #                             )
-            #                             break
-
-            #                 sig = DecodedSignalLine(
-            #                     raw_value=raw_value,
-            #                     changed=bool(
-            #                         line.changed
-            #                     ),
-            #                 )
-
-            #                 sig._runtime_signal_name = str(
-            #                     sig_name
-            #                 )
-            #                 sig._sig_info = sig_def
-
-            #                 decoded_signals.append(
-            #                     sig
-            #                 )
-
-            #         line.signals = decoded_signals
-
-            #     except Exception as e:
-            #         LOG.exception(
-            #             "Decode failed: %s",
-            #             e,
-            #         )
+                except Exception as e:
+                    LOG.exception("Decode failed: %s",e,)
 
             pending = self.editingLine.get(
                 int(line.line_number)

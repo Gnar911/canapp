@@ -999,9 +999,9 @@ class CustomSendMessagePanel(QtWidgets.QWidget):
                 ]
         )
 
-        self.add_btn.clicked.connect(
+        # self.add_btn.clicked.connect(
             
-        )
+        # )
 
         # Initialize button states
         # self._refresh_buttons()

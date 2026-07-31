@@ -107,14 +107,14 @@ def test_main_screen(
     #app.replay_vm().wait_ready(lambda: app.replay_vm().stopReplay())
 
     # 5. Filter message
-    app.log_vm().messageFilter = MsgFilter(0x48E)
-    qtbot.wait(5000)
+    # app.log_vm().messageFilter = MsgFilter(0x48E)
+    # qtbot.wait(5000)
 
-    app.log_vm().messageFilter = NoFilter()
-    qtbot.wait(3000)
+    # app.log_vm().messageFilter = NoFilter()
+    # qtbot.wait(3000)
 
     # 6. Close current Log file
-    app.log_vm().closeLog()
+    #app.log_vm().closeLog()
 
     from PySide6.QtCore import QEventLoop
     loop = QEventLoop()

@@ -17,6 +17,7 @@ from PySide6.QtCore import (
 
 @dataclass(frozen=True)
 class DeviceInfoLine:
+    data: CANDeviceInfo
     vendor_name: str
     channel_name: str
     channel_index: int
@@ -92,6 +93,7 @@ class ChannelViewModel(QObject, ScannerVM):
         for dev in self.available_devices:
             lines.append(
                 DeviceInfoLine(
+                    dev,
                     str(dev.vendor),
                     str(dev.device_id),
                     0,
@@ -104,6 +106,7 @@ class ChannelViewModel(QObject, ScannerVM):
         for dev in self.acquired_devices:
             lines.append(
                 DeviceInfoLine(
+                    dev,
                     str(dev.vendor),
                     str(dev.device_id),
                     0,

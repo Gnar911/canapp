@@ -513,9 +513,15 @@ class LogViewModel_QtAdapter(QAbstractItemModel):
         if not index.isValid():
             return None
 
+        if (
+            role
+            != Qt.ItemDataRole.DisplayRole
+        ):
+            return
+
         obj = index.internalPointer()
 
-        if isinstance(obj, CANLogLine):
+        if isinstance(obj, CANLogLine) and index.column() == self.COL_LOG_MESSAGES:
             return self._line_data(
                 index,
                 obj,
@@ -525,12 +531,8 @@ class LogViewModel_QtAdapter(QAbstractItemModel):
         if isinstance(
             obj,
             DecodedSignalLine,
-        ):
-            return self._signal_data(
-                index,
-                obj,
-                role,
-            )
+        ) and index.column() == self.COL_LOG_MESSAGES:
+            return obj.signal_line
 
         return None
 
@@ -570,81 +572,7 @@ class LogViewModel_QtAdapter(QAbstractItemModel):
 
         return None
 
-    def _signal_data(
-        self,
-        index: QModelIndex,
-        signal: DecodedSignalLine,
-        role: int,
-    ) -> Any:
-        if (
-            role
-            == Qt.ItemDataRole.ForegroundRole
-        ):
-            return self.TAG_FG[
-                "change"
-                if signal.changed
-                else "normal"
-            ]
-
-        if (
-            role
-            != Qt.ItemDataRole.DisplayRole
-        ):
-            return None
-
-        column = index.column()
-
-        if column == self.COL_TREND:
-            return (
-                "●"
-                if signal.changed
-                else ""
-            )
-
-        if column != self.COL_LOG_MESSAGES:
-            return None
-
-        signal_name = str(
-            getattr(
-                signal,
-                "_runtime_signal_name",
-                "",
-            )
-            or ""
-        )
-
-        sig_info = getattr(
-            signal,
-            "_sig_info",
-            None,
-        )
-
-        unit = ""
-
-        if sig_info is not None:
-            unit = str(
-                getattr(
-                    sig_info,
-                    "unit",
-                    "",
-                )
-                or ""
-            )
-
-        text = (
-            f"{signal_name}: "
-            f"{signal.raw_value}"
-        )
-
-        if unit:
-            text += f" {unit}"
-
-        return text
-
-    def flags(
-        self,
-        index: QModelIndex,
-    ) -> Qt.ItemFlag:
+    def flags(self, index: QModelIndex) -> Qt.ItemFlags:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
 
@@ -652,7 +580,7 @@ class LogViewModel_QtAdapter(QAbstractItemModel):
             Qt.ItemFlag.ItemIsEnabled
             | Qt.ItemFlag.ItemIsSelectable
         )
-
+    
     def headerData(
         self,
         section: int,
@@ -692,20 +620,22 @@ class FileLogViewPanel(QGroupBox):
         self._build_ui()
 
         # UI → logic
-        self.log_selector.currentIndexChanged.connect(
-            lambda index: setattr(
-                self.vm,
-                "log_id",
-                self.log_selector.itemData(index),
-            )
-        )
-        self.page_selector.currentIndexChanged.connect(
-            lambda index: setattr(
-                self.vm,
-                "pageNum",
-                index,
-            )
-        )
+        """ BUG: Auto set log_id to None when log_id changed emit"""
+        # self.log_selector.currentIndexChanged.connect(
+        #     lambda index: setattr(
+        #         self.vm,
+        #         "log_id",
+        #         self.log_selector.itemData(index),
+        #     )
+        # )
+
+        # self.page_selector.currentIndexChanged.connect(
+        #     lambda index: setattr(
+        #         self.vm,
+        #         "pageNum",
+        #         index,
+        #     )
+        # )
         self.btn_toggle_toolbox.toggled.connect(self._toggle_toolbox)
         self.btn_open_log.clicked.connect(self._on_open_log_clicked)
         self.btn_open_folder.clicked.connect(self._on_open_folder_clicked)

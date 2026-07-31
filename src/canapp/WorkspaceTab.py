@@ -55,9 +55,47 @@ class WorkspaceDockContainer(QtWidgets.QWidget):
         self.dock_manager = QtAds.CDockManager(self)
         self.dock_manager.setStyleSheet(
             """
-            QTabBar::tab { color: white; opacity: 1.0; }
-            QTabBar::tab:selected { color: white; }
-            QTabBar::tab:!selected { color: white; }
+            /* Dock tab bar - modern dark style */
+            QTabBar {
+                qproperty-drawBase: 0;
+                spacing: 6px;
+            }
+
+            QTabBar::tab {
+                background: transparent;
+                color: #E6E6E6;
+                padding: 8px 14px;
+                margin: 2px;
+                border-radius: 6px;
+                font-weight: 600;
+                min-width: 96px;
+            }
+
+            QTabBar::tab:hover {
+                background: rgba(255,255,255,0.04);
+                color: #FFFFFF;
+            }
+
+            QTabBar::tab:selected {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3a7bd5, stop:1 #2b6fb3);
+                color: #FFFFFF;
+                border: 1px solid rgba(255,255,255,0.08);
+                padding: 9px 14px;
+            }
+
+            QTabBar::tab:!selected {
+                background: transparent;
+                color: #CFCFCF;
+            }
+
+            QTabBar::tab:disabled {
+                color: #7F7F7F;
+            }
+
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+            }
             """
         )
 

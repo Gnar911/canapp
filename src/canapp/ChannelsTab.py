@@ -187,7 +187,7 @@ class ChannelsTab(QtWidgets.QWidget):
         if line.is_acquired:
             btn = QtWidgets.QPushButton("Unlock")
             btn.clicked.connect(
-                lambda _, device=line: self.vm.releaseDevice(device)
+                lambda _, device=line: self.vm.releaseDevice(device.data)
             )
             layout.addWidget(btn)
 

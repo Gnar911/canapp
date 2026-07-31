@@ -44,10 +44,6 @@ def test_record_view_model_call_vm_functions(
     # 2: User press send button on send panel
     app.schedule_vm().wait_ready(lambda: app.schedule_vm().sendMsgLoop(entry))
 
-    # 6: The send loop process keep running at the background for 3 seconds
-    time.sleep(20.0)
-    # display_entry = wait_evaluation(lambda: app.record_vm().entry, max_ms=16.7, name= "entry eval")
-    # assert display_entry is not None
     assert app.record_vm().totalRows > 5
 
     # 7: User back and press pause send
